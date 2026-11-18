@@ -1,0 +1,1867 @@
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#ffffff" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <title>Dashboard Data Sekolah | Murid, Guru & AKP</title>
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <!-- Pustaka SheetJS untuk baca & eksport fail Excel (.xlsx / .csv) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+  <style>
+    :root {
+      --bg-canvas: #f3f6fb;
+      --bg-pure: #ffffff;
+      --bg-soft: #f8fafd;
+      --text-main: #0f172a;
+      --text-sub: #475569;
+      --text-muted: #94a3b8;
+      --border-light: #e2e8f0;
+      --border-3d: #cbd5e1;
+      --primary: #1d4ed8;
+      --primary-dark: #1e3a8a;
+      --primary-soft: #eff6ff;
+      --murid: #059669;
+      --murid-dark: #047857;
+      --murid-soft: #ecfdf5;
+      --guru: #4f46e5;
+      --guru-dark: #3730a3;
+      --guru-soft: #eef2ff;
+      --akp: #d97706;
+      --akp-dark: #b45309;
+      --akp-soft: #fffbeb;
+      --danger: #dc2626;
+      --radius-lg: 20px;
+      --radius-md: 14px;
+      --radius-sm: 10px;
+      --shadow-3d-card:
+        0 14px 30px -10px rgba(15, 23, 42, 0.10),
+        0 4px 12px -4px rgba(15, 23, 42, 0.05),
+        inset 0 1px 0 rgba(255, 255, 255, 0.95);
+      --shadow-3d-hover:
+        0 20px 38px -12px rgba(29, 78, 216, 0.16),
+        0 8px 16px -6px rgba(15, 23, 42, 0.07),
+        inset 0 1px 0 rgba(255, 255, 255, 1);
+      --shadow-inset: inset 0 2px 6px rgba(15, 23, 42, 0.06);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+
+    body {
+      background: radial-gradient(circle at 15% 10%, #ffffff 0%, #f3f6fb 55%, #e9eff8 100%);
+      color: var(--text-main);
+      min-height: 100vh;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ================= KOMPONEN 3D KORPORAT PUTIH ================= */
+    .card-3d {
+      background: linear-gradient(180deg, #ffffff 0%, #fcfdff 100%);
+      border: 1px solid rgba(226, 232, 240, 0.95);
+      border-bottom: 4px solid var(--border-3d);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-3d-card);
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .card-3d-interactive:hover {
+      transform: translateY(-3px);
+      box-shadow: var(--shadow-3d-hover);
+    }
+
+    .btn-3d {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 11px 18px;
+      font-size: 0.9rem;
+      font-weight: 700;
+      border-radius: var(--radius-md);
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition: all 0.14s ease;
+      user-select: none;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+
+    .btn-3d:active:not(:disabled) {
+      transform: translateY(3px);
+      border-bottom-width: 1px !important;
+      margin-bottom: 3px;
+    }
+
+    .btn-3d:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    .btn-primary {
+      background: linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%);
+      color: #ffffff;
+      border-bottom: 4px solid #1e3a8a;
+      box-shadow: 0 8px 18px -6px rgba(29, 78, 216, 0.45);
+    }
+
+    .btn-white {
+      background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+      color: var(--text-main);
+      border: 1px solid #dbe2ec;
+      border-bottom: 4px solid #cbd5e1;
+      box-shadow: 0 6px 14px -6px rgba(15, 23, 42, 0.12);
+    }
+
+    .btn-white:hover:not(:disabled) {
+      background: #ffffff;
+      border-color: #93c5fd;
+      color: var(--primary);
+    }
+
+    .btn-emerald {
+      background: linear-gradient(180deg, #10b981 0%, #059669 100%);
+      color: #ffffff;
+      border-bottom: 4px solid #047857;
+      box-shadow: 0 8px 18px -6px rgba(5, 150, 105, 0.4);
+    }
+
+    .btn-sm {
+      padding: 8px 13px;
+      font-size: 0.82rem;
+      border-radius: var(--radius-sm);
+    }
+
+    .input-3d, .select-3d {
+      width: 100%;
+      padding: 12px 15px;
+      font-size: 0.94rem;
+      font-weight: 500;
+      color: var(--text-main);
+      background: #ffffff;
+      border: 1.5px solid #dbe2ec;
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-inset);
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .input-3d:focus, .select-3d:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12), var(--shadow-inset);
+    }
+
+    /* ================= SKRIN KUNCI KESELAMATAN (101010) ================= */
+    #lockScreen {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: radial-gradient(circle at top, #ffffff 0%, #eef3fb 100%);
+    }
+
+    .lock-card {
+      width: 100%;
+      max-width: 410px;
+      padding: 36px 28px;
+      text-align: center;
+    }
+
+    .lock-emblem {
+      width: 72px;
+      height: 72px;
+      margin: 0 auto 18px;
+      border-radius: 22px;
+      background: linear-gradient(145deg, #ffffff, #e6eefb);
+      border: 1px solid #dbe4f3;
+      border-bottom: 4px solid #cbd5e1;
+      box-shadow: 0 12px 24px -8px rgba(29, 78, 216, 0.22);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--primary);
+    }
+
+    .lock-card h1 {
+      font-size: 1.35rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      margin-bottom: 6px;
+    }
+
+    .lock-card p {
+      font-size: 0.88rem;
+      color: var(--text-sub);
+      margin-bottom: 24px;
+    }
+
+    .pin-wrap {
+      position: relative;
+      margin-bottom: 14px;
+    }
+
+    .pin-input {
+      text-align: center;
+      font-size: 1.35rem;
+      letter-spacing: 0.35em;
+      font-weight: 800;
+      padding-right: 44px;
+    }
+
+    .pin-toggle {
+      position: absolute;
+      right: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 4px;
+    }
+
+    .error-msg {
+      color: var(--danger);
+      font-size: 0.84rem;
+      font-weight: 600;
+      min-height: 20px;
+      margin-bottom: 10px;
+    }
+
+    /* ================= SUSUN ATUR UTAMA ================= */
+    #appShell {
+      display: none;
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 18px 18px 80px;
+    }
+
+    .topbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 16px 22px;
+      margin-bottom: 20px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .brand-icon {
+      width: 46px;
+      height: 46px;
+      border-radius: 14px;
+      background: linear-gradient(145deg, #2563eb, #1e40af);
+      color: #ffffff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 8px 18px -5px rgba(37, 99, 235, 0.45);
+      flex-shrink: 0;
+    }
+
+    .brand-text h2 {
+      font-size: 1.12rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      color: var(--text-main);
+    }
+
+    .brand-text span {
+      font-size: 0.78rem;
+      color: var(--text-sub);
+      font-weight: 600;
+    }
+
+    .nav-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      background: #f1f5f9;
+      padding: 6px;
+      border-radius: 16px;
+      box-shadow: var(--shadow-inset);
+    }
+
+    .nav-pill {
+      padding: 9px 16px;
+      border-radius: 12px;
+      border: none;
+      background: transparent;
+      color: var(--text-sub);
+      font-weight: 700;
+      font-size: 0.85rem;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      transition: all 0.18s ease;
+    }
+
+    .nav-pill.active {
+      background: #ffffff;
+      color: var(--primary);
+      box-shadow: 0 5px 12px -4px rgba(15, 23, 42, 0.14), 0 2px 0 #cbd5e1;
+    }
+
+    .topbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .status-dot {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      padding: 7px 12px;
+      border-radius: 999px;
+      background: #ffffff;
+      border: 1px solid var(--border-light);
+      color: var(--text-sub);
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #94a3b8;
+    }
+
+    .dot.online { background: #10b981; box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2); }
+    .dot.offline { background: #ef4444; box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.2); }
+
+    /* ================= BAHAGIAN CARIAN SEKOLAH ================= */
+    .search-panel {
+      padding: 22px;
+      margin-bottom: 20px;
+    }
+
+    .search-grid {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 12px;
+      align-items: end;
+    }
+
+    .field-label {
+      display: block;
+      font-size: 0.8rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-sub);
+      margin-bottom: 7px;
+    }
+
+    .autocomplete-box {
+      position: relative;
+    }
+
+    .autocomplete-list {
+      position: absolute;
+      top: calc(100% + 6px);
+      left: 0;
+      right: 0;
+      max-height: 290px;
+      overflow-y: auto;
+      background: #ffffff;
+      border: 1px solid #cbd5e1;
+      border-bottom: 4px solid #cbd5e1;
+      border-radius: var(--radius-md);
+      box-shadow: 0 20px 40px -12px rgba(15, 23, 42, 0.22);
+      z-index: 60;
+      display: none;
+    }
+
+    .autocomplete-item {
+      padding: 11px 15px;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      border-bottom: 1px solid #f1f5f9;
+      transition: background 0.12s;
+    }
+
+    .autocomplete-item:hover {
+      background: var(--primary-soft);
+    }
+
+    .autocomplete-kod {
+      font-weight: 800;
+      color: var(--primary);
+      font-size: 0.9rem;
+      background: #eff6ff;
+      padding: 3px 9px;
+      border-radius: 8px;
+      border: 1px solid #dbeafe;
+      flex-shrink: 0;
+    }
+
+    .autocomplete-nama {
+      font-size: 0.86rem;
+      font-weight: 600;
+      color: var(--text-main);
+      text-align: right;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* ================= KAD KPI 3D ================= */
+    .school-banner {
+      padding: 20px 24px;
+      margin-bottom: 18px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      background: linear-gradient(135deg, #ffffff 0%, #f5f9ff 100%);
+    }
+
+    .school-badge {
+      display: inline-block;
+      background: var(--primary-soft);
+      color: var(--primary);
+      border: 1px solid #bfdbfe;
+      font-weight: 800;
+      font-size: 0.82rem;
+      padding: 4px 12px;
+      border-radius: 999px;
+      margin-bottom: 6px;
+    }
+
+    .school-title {
+      font-size: 1.35rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      color: var(--text-main);
+    }
+
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 22px;
+    }
+
+    .kpi-card {
+      padding: 20px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .kpi-card::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 5px;
+    }
+
+    .kpi-murid::after { background: linear-gradient(90deg, #10b981, #34d399); }
+    .kpi-guru::after { background: linear-gradient(90deg, #4f46e5, #818cf8); }
+    .kpi-akp::after { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+    .kpi-ratio::after { background: linear-gradient(90deg, #2563eb, #60a5fa); }
+
+    .kpi-label {
+      font-size: 0.78rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-sub);
+    }
+
+    .kpi-value {
+      font-size: 2rem;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      margin: 6px 0 4px;
+      color: var(--text-main);
+    }
+
+    .kpi-meta {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+
+    /* ================= BAR KAWALAN JADUAL & MOD PAPARAN ================= */
+    .control-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .sub-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .cat-tab {
+      padding: 10px 16px;
+      border-radius: 13px;
+      font-weight: 700;
+      font-size: 0.86rem;
+      background: #ffffff;
+      color: var(--text-sub);
+      border: 1px solid #dbe2ec;
+      border-bottom: 4px solid #cbd5e1;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.15s;
+    }
+
+    .cat-tab .count-chip {
+      background: #f1f5f9;
+      color: var(--text-main);
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 0.76rem;
+      font-weight: 800;
+    }
+
+    .cat-tab.active-murid { background: var(--murid-soft); color: var(--murid-dark); border-color: #6ee7b7; border-bottom-color: var(--murid); }
+    .cat-tab.active-guru { background: var(--guru-soft); color: var(--guru-dark); border-color: #a5b4fc; border-bottom-color: var(--guru); }
+    .cat-tab.active-akp { background: var(--akp-soft); color: var(--akp-dark); border-color: #fcd34d; border-bottom-color: var(--akp); }
+    .cat-tab.active-all { background: var(--primary-soft); color: var(--primary-dark); border-color: #93c5fd; border-bottom-color: var(--primary); }
+
+    /* ================= KAD JADUAL DATA ================= */
+    .data-section {
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+
+    .data-section-header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--border-light);
+    }
+
+    .section-title-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .section-pill {
+      width: 12px;
+      height: 28px;
+      border-radius: 6px;
+    }
+
+    .section-tools {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .mini-search {
+      width: 220px;
+      padding: 8px 12px;
+      font-size: 0.85rem;
+    }
+
+    .table-wrapper {
+      width: 100%;
+      overflow-x: auto;
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius-md);
+      background: #ffffff;
+    }
+
+    table.data-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.84rem;
+      min-width: 560px;
+    }
+
+    table.data-table thead th {
+      position: sticky;
+      top: 0;
+      background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+      color: var(--text-main);
+      font-weight: 800;
+      font-size: 0.76rem;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      text-align: left;
+      padding: 12px 14px;
+      border-bottom: 2px solid #cbd5e1;
+      cursor: pointer;
+      white-space: nowrap;
+      user-select: none;
+    }
+
+    table.data-table thead th:hover {
+      background: #e2e8f0;
+    }
+
+    table.data-table tbody td {
+      padding: 10px 14px;
+      border-bottom: 1px solid #f1f5f9;
+      color: #1e293b;
+      vertical-align: middle;
+    }
+
+    table.data-table tbody tr:hover {
+      background: #f8fbff;
+    }
+
+    .pagination-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-top: 12px;
+      font-size: 0.82rem;
+      color: var(--text-sub);
+    }
+
+    /* ================= MOD MUAT NAIK EXCEL ================= */
+    .upload-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 18px;
+    }
+
+    .upload-card {
+      padding: 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .dropzone {
+      border: 2px dashed #cbd5e1;
+      border-radius: var(--radius-md);
+      padding: 22px 14px;
+      text-align: center;
+      background: var(--bg-soft);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .dropzone:hover, .dropzone.dragover {
+      border-color: var(--primary);
+      background: var(--primary-soft);
+    }
+
+    .progress-track {
+      width: 100%;
+      height: 12px;
+      background: #e2e8f0;
+      border-radius: 999px;
+      overflow: hidden;
+      box-shadow: var(--shadow-inset);
+    }
+
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #2563eb, #10b981);
+      transition: width 0.25s ease;
+    }
+
+    /* ================= MODAL PEMILIH KOLUM DINAMIK ================= */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 900;
+      background: rgba(15, 23, 42, 0.42);
+      backdrop-filter: blur(5px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 18px;
+    }
+
+    .modal-backdrop.open {
+      display: flex;
+    }
+
+    .modal-box {
+      width: 100%;
+      max-width: 720px;
+      max-height: 86vh;
+      display: flex;
+      flex-direction: column;
+      padding: 24px;
+    }
+
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+
+    .col-checkbox-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 8px;
+      overflow-y: auto;
+      padding: 6px 2px;
+      margin: 12px 0 18px;
+      max-height: 48vh;
+    }
+
+    .col-chip {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 10px 12px;
+      border-radius: 11px;
+      background: #ffffff;
+      border: 1.5px solid #e2e8f0;
+      border-bottom: 3px solid #cbd5e1;
+      cursor: pointer;
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--text-main);
+      transition: all 0.14s;
+    }
+
+    .col-chip:has(input:checked) {
+      background: var(--primary-soft);
+      border-color: #93c5fd;
+      border-bottom-color: var(--primary);
+      color: var(--primary-dark);
+    }
+
+    .col-chip input {
+      width: 16px;
+      height: 16px;
+      accent-color: var(--primary);
+      flex-shrink: 0;
+    }
+
+    /* ================= TOAST & LOADING ================= */
+    #toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 9999;
+      background: #ffffff;
+      color: var(--text-main);
+      border: 1px solid #cbd5e1;
+      border-bottom: 4px solid var(--primary);
+      padding: 13px 20px;
+      border-radius: 14px;
+      box-shadow: 0 18px 36px -10px rgba(15, 23, 42, 0.24);
+      font-size: 0.88rem;
+      font-weight: 700;
+      display: none;
+      max-width: 360px;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 46px 20px;
+      color: var(--text-sub);
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 18px;
+      height: 18px;
+      border: 3px solid rgba(37, 99, 235, 0.2);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .view-panel { display: none; }
+    .view-panel.active { display: block; }
+
+    /* ================= RESPONSIF TELEFON PINTAR & TABLET ================= */
+    @media (max-width: 980px) {
+      .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+      .upload-grid { grid-template-columns: 1fr; }
+      .search-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 640px) {
+      #appShell { padding: 12px 12px 70px; }
+      .topbar { padding: 14px; }
+      .nav-pills { width: 100%; justify-content: space-between; }
+      .nav-pill { flex: 1; justify-content: center; padding: 9px 8px; font-size: 0.78rem; }
+      .kpi-value { font-size: 1.55rem; }
+      .mini-search { width: 100%; }
+      .section-tools { width: 100%; }
+      .school-title { font-size: 1.12rem; }
+    }
+
+    /* ================= MOD CETAK LAPORAN ================= */
+    @media print {
+      body { background: #ffffff !important; }
+      .topbar, .search-panel, .control-bar, .section-tools, .pagination-bar, #lockScreen, #toast { display: none !important; }
+      .card-3d { box-shadow: none !important; border: 1px solid #cbd5e1 !important; break-inside: avoid; }
+      .table-wrapper { overflow: visible !important; }
+      table.data-table { min-width: auto !important; font-size: 9pt !important; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ================= SKRIN LOG MASUK KESELAMATAN ================= -->
+  <div id="lockScreen">
+    <div class="card-3d lock-card">
+      <div class="lock-emblem">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+        </svg>
+      </div>
+      <h1>Dashboard Data Sekolah</h1>
+      <p>Akses terhad. Sila masukkan kata laluan keselamatan untuk membuka pangkalan data Murid, Guru & AKP.</p>
+      <div class="pin-wrap">
+        <input id="pinInput" type="password" inputmode="numeric" maxlength="12" class="input-3d pin-input" placeholder="••••••" autocomplete="off" />
+        <button type="button" class="pin-toggle" id="togglePinVis" title="Tunjuk/Sembunyi Kata Laluan">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+      </div>
+      <div id="pinError" class="error-msg"></div>
+      <button id="btnUnlock" class="btn-3d btn-primary" style="width:100%;">Buka Aplikasi</button>
+    </div>
+  </div>
+
+  <!-- ================= APLIKASI UTAMA ================= -->
+  <div id="appShell">
+    <!-- BAR ATAS KORPORAT 3D -->
+    <header class="card-3d topbar">
+      <div class="brand">
+        <div class="brand-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 21h18"/><path d="M5 21V7l7-4 7 4v14"/><path d="M9 21v-6h6v6"/>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h2>Sistem Dashboard Data Sekolah</h2>
+          <span>Analisis Bersepadu Murid • Guru • AKP</span>
+        </div>
+      </div>
+
+      <nav class="nav-pills" aria-label="Menu Utama">
+        <button class="nav-pill active" data-view="dashboard">📊 Dashboard</button>
+        <button class="nav-pill" data-view="upload">📤 Muat Naik Excel</button>
+        <button class="nav-pill" data-view="settings">⚙️ Tetapan</button>
+      </nav>
+
+      <div class="topbar-actions">
+        <div class="status-dot" id="connStatus">
+          <span class="dot"></span>
+          <span>Menyemak...</span>
+        </div>
+        <button class="btn-3d btn-white btn-sm" id="btnLock" title="Kunci Semula Aplikasi">🔒 Kunci</button>
+      </div>
+    </header>
+
+    <!-- ================= PAPARAN 1: DASHBOARD PERBANDINGAN SEKOLAH ================= -->
+    <section id="view-dashboard" class="view-panel active">
+      <div class="card-3d search-panel">
+        <div class="search-grid">
+          <div class="autocomplete-box">
+            <label class="field-label" for="schoolSearchInput">Cari atau Pilih Kod Sekolah / Nama Sekolah</label>
+            <input id="schoolSearchInput" type="text" class="input-3d" placeholder="Contoh: KBA1008, KBS1008 atau taip nama sekolah..." autocomplete="off" />
+            <div id="schoolDropdown" class="autocomplete-list"></div>
+          </div>
+          <button id="btnLoadSchool" class="btn-3d btn-primary">🔍 Papar Data Sekolah</button>
+          <button id="btnRefreshMeta" class="btn-3d btn-white" title="Muat semula indeks sekolah daripada Google Sheet">🔄 Segar Semula</button>
+        </div>
+      </div>
+
+      <!-- KEADAAN KOSONG SEBELUM CARIAN -->
+      <div id="dashboardPlaceholder" class="card-3d empty-state">
+        <div style="font-size:2.6rem; margin-bottom:10px;">🏫</div>
+        <h3 style="font-size:1.1rem; font-weight:800; color:var(--text-main); margin-bottom:6px;">Pilih Kod Sekolah Untuk Membandingkan Data</h3>
+        <p style="font-size:0.9rem; max-width:520px; margin:0 auto;">
+          Taip kod sekolah pada kotak carian di atas untuk memaparkan senarai <strong>Murid</strong>, <strong>Guru</strong>, dan <strong>AKP</strong> secara serentak mengikut pilihan kolum anda.
+        </p>
+      </div>
+
+      <!-- HASIL PAPARAN SEKOLAH -->
+      <div id="schoolResultArea" style="display:none;">
+        <!-- BANNER SEKOLAH -->
+        <div class="card-3d school-banner">
+          <div>
+            <span id="resKodBadge" class="school-badge">KOD SEKOLAH</span>
+            <h2 id="resNamaSekolah" class="school-title">NAMA SEKOLAH</h2>
+          </div>
+          <div style="display:flex; flex-wrap:wrap; gap:8px;">
+            <button id="btnExportSchool" class="btn-3d btn-emerald btn-sm">📥 Eksport Excel Sekolah</button>
+            <button id="btnPrintSchool" class="btn-3d btn-white btn-sm">🖨️ Cetak Laporan</button>
+          </div>
+        </div>
+
+        <!-- KAD KPI 3D -->
+        <div class="kpi-grid">
+          <div class="card-3d card-3d-interactive kpi-card kpi-murid">
+            <div class="kpi-label">Jumlah Murid</div>
+            <div class="kpi-value" id="kpiMurid">0</div>
+            <div class="kpi-meta" id="kpiMuridMeta">L: 0 • P: 0</div>
+          </div>
+          <div class="card-3d card-3d-interactive kpi-card kpi-guru">
+            <div class="kpi-label">Jumlah Guru</div>
+            <div class="kpi-value" id="kpiGuru">0</div>
+            <div class="kpi-meta" id="kpiGuruMeta">L: 0 • P: 0</div>
+          </div>
+          <div class="card-3d card-3d-interactive kpi-card kpi-akp">
+            <div class="kpi-label">Jumlah AKP</div>
+            <div class="kpi-value" id="kpiAkp">0</div>
+            <div class="kpi-meta" id="kpiAkpMeta">L: 0 • P: 0</div>
+          </div>
+          <div class="card-3d card-3d-interactive kpi-card kpi-ratio">
+            <div class="kpi-label">Nisbah Murid : Guru</div>
+            <div class="kpi-value" id="kpiRatio">0 : 1</div>
+            <div class="kpi-meta" id="kpiRatioMeta">Keseluruhan Warga: 0</div>
+          </div>
+        </div>
+
+        <!-- TAB KATEGORI & MOD PAPARAN -->
+        <div class="control-bar">
+          <div class="sub-tabs">
+            <button class="cat-tab active-all" data-catmode="ALL">📋 Semua Serentak</button>
+            <button class="cat-tab" data-catmode="MURID">👨‍🎓 Murid <span class="count-chip" id="chipMurid">0</span></button>
+            <button class="cat-tab" data-catmode="GURU">👩‍🏫 Guru <span class="count-chip" id="chipGuru">0</span></button>
+            <button class="cat-tab" data-catmode="AKP">🧑‍💼 AKP <span class="count-chip" id="chipAkp">0</span></button>
+          </div>
+        </div>
+
+        <!-- KONTAINER JADUAL 3 KATEGORI -->
+        <div id="tablesContainer"></div>
+      </div>
+    </section>
+
+    <!-- ================= PAPARAN 2: MUAT NAIK EXCEL KE GOOGLE SHEET ================= -->
+    <section id="view-upload" class="view-panel">
+      <div class="card-3d" style="padding:20px 22px; margin-bottom:18px;">
+        <h3 style="font-size:1.08rem; font-weight:800; margin-bottom:6px;">Muat Naik Fail Excel (.xlsx / .xls / .csv) ke Google Sheet</h3>
+        <p style="font-size:0.87rem; color:var(--text-sub);">
+          Data akan dihantar secara berperingkat (<em>batch upload</em> 500 baris setiap pusingan) ke Google Sheet supaya stabil walaupun fail bersaiz besar. Pastikan fail mempunyai kolum <strong>KODSEKOLAH</strong>.
+        </p>
+        <div style="margin-top:14px; display:flex; flex-wrap:wrap; gap:16px; align-items:center;">
+          <label style="display:flex; align-items:center; gap:7px; font-size:0.86rem; font-weight:700; cursor:pointer;">
+            <input type="radio" name="uploadMode" value="replace" checked style="accent-color:var(--primary);" />
+            Ganti Data Sedia Ada (Replace)
+          </label>
+          <label style="display:flex; align-items:center; gap:7px; font-size:0.86rem; font-weight:700; cursor:pointer;">
+            <input type="radio" name="uploadMode" value="append" style="accent-color:var(--primary);" />
+            Tambah di Bawah Data Sedia Ada (Append — sesuai untuk gabung ikut PPD/Negeri)
+          </label>
+        </div>
+      </div>
+
+      <div class="upload-grid">
+        <!-- KAD UPLOAD MURID -->
+        <div class="card-3d upload-card" data-upload-cat="MURID">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <h4 style="font-weight:800; color:var(--murid-dark);">1. Data Murid</h4>
+            <span class="school-badge" style="margin:0; background:var(--murid-soft); color:var(--murid-dark); border-color:#a7f3d0;" id="statCountMURID">0 rekod</span>
+          </div>
+          <label class="dropzone" for="fileMURID">
+            <div style="font-size:1.8rem; margin-bottom:6px;">📄</div>
+            <div style="font-weight:700; font-size:0.86rem;">Klik atau tarik fail Excel Murid ke sini</div>
+            <div style="font-size:0.76rem; color:var(--text-muted); margin-top:4px;">.xlsx, .xls atau .csv</div>
+            <input type="file" id="fileMURID" accept=".xlsx,.xls,.csv" hidden />
+          </label>
+          <div id="infoMURID" style="font-size:0.82rem; color:var(--text-sub); min-height:38px;">Belum ada fail dipilih.</div>
+          <div class="progress-track"><div class="progress-fill" id="progMURID"></div></div>
+          <div id="progTextMURID" style="font-size:0.78rem; font-weight:700; color:var(--text-muted);">Sedia</div>
+          <button class="btn-3d btn-emerald" id="btnUploadMURID" disabled>🚀 Muat Naik Data Murid</button>
+        </div>
+
+        <!-- KAD UPLOAD GURU -->
+        <div class="card-3d upload-card" data-upload-cat="GURU">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <h4 style="font-weight:800; color:var(--guru-dark);">2. Data Guru</h4>
+            <span class="school-badge" style="margin:0; background:var(--guru-soft); color:var(--guru-dark); border-color:#c7d2fe;" id="statCountGURU">0 rekod</span>
+          </div>
+          <label class="dropzone" for="fileGURU">
+            <div style="font-size:1.8rem; margin-bottom:6px;">📄</div>
+            <div style="font-weight:700; font-size:0.86rem;">Klik atau tarik fail Excel Guru ke sini</div>
+            <div style="font-size:0.76rem; color:var(--text-muted); margin-top:4px;">.xlsx, .xls atau .csv</div>
+            <input type="file" id="fileGURU" accept=".xlsx,.xls,.csv" hidden />
+          </label>
+          <div id="infoGURU" style="font-size:0.82rem; color:var(--text-sub); min-height:38px;">Belum ada fail dipilih.</div>
+          <div class="progress-track"><div class="progress-fill" id="progGURU"></div></div>
+          <div id="progTextGURU" style="font-size:0.78rem; font-weight:700; color:var(--text-muted);">Sedia</div>
+          <button class="btn-3d btn-primary" id="btnUploadGURU" disabled>🚀 Muat Naik Data Guru</button>
+        </div>
+
+        <!-- KAD UPLOAD AKP -->
+        <div class="card-3d upload-card" data-upload-cat="AKP">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <h4 style="font-weight:800; color:var(--akp-dark);">3. Data AKP</h4>
+            <span class="school-badge" style="margin:0; background:var(--akp-soft); color:var(--akp-dark); border-color:#fde68a;" id="statCountAKP">0 rekod</span>
+          </div>
+          <label class="dropzone" for="fileAKP">
+            <div style="font-size:1.8rem; margin-bottom:6px;">📄</div>
+            <div style="font-weight:700; font-size:0.86rem;">Klik atau tarik fail Excel AKP ke sini</div>
+            <div style="font-size:0.76rem; color:var(--text-muted); margin-top:4px;">.xlsx, .xls atau .csv</div>
+            <input type="file" id="fileAKP" accept=".xlsx,.xls,.csv" hidden />
+          </label>
+          <div id="infoAKP" style="font-size:0.82rem; color:var(--text-sub); min-height:38px;">Belum ada fail dipilih.</div>
+          <div class="progress-track"><div class="progress-fill" id="progAKP"></div></div>
+          <div id="progTextAKP" style="font-size:0.78rem; font-weight:700; color:var(--text-muted);">Sedia</div>
+          <button class="btn-3d btn-white" id="btnUploadAKP" disabled style="border-bottom-color:var(--akp); color:var(--akp-dark);">🚀 Muat Naik Data AKP</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= PAPARAN 3: TETAPAN SAMBUNGAN ================= -->
+    <section id="view-settings" class="view-panel">
+      <div class="card-3d" style="padding:24px; max-width:760px;">
+        <h3 style="font-size:1.1rem; font-weight:800; margin-bottom:6px;">Tetapan Sambungan Google Apps Script</h3>
+        <p style="font-size:0.86rem; color:var(--text-sub); margin-bottom:16px;">
+          Tampal URL Web App daripada Google Apps Script (berakhir dengan <code>/exec</code>) di bawah. Tetapan ini disimpan secara automatik pada pelayar anda.
+        </p>
+
+        <label class="field-label" for="gasUrlInput">URL Web App Google Apps Script</label>
+        <input id="gasUrlInput" type="url" class="input-3d" placeholder="https://script.google.com/macros/s/xxxxx/exec" style="margin-bottom:14px;" />
+
+        <div style="display:flex; flex-wrap:wrap; gap:10px; margin-bottom:22px;">
+          <button id="btnSaveGasUrl" class="btn-3d btn-primary">💾 Simpan & Uji Sambungan</button>
+          <button id="btnResetCols" class="btn-3d btn-white">♻️ Tetap Semula Pilihan Kolum</button>
+        </div>
+
+        <div style="background:var(--bg-soft); border:1px solid var(--border-light); border-radius:14px; padding:16px;">
+          <h4 style="font-size:0.9rem; font-weight:800; margin-bottom:8px;">Ringkasan Pangkalan Data Semasa</h4>
+          <div id="dbSummaryText" style="font-size:0.85rem; color:var(--text-sub); line-height:1.8;">
+            Belum disambungkan ke Google Sheet.
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ================= MODAL PEMILIH KOLUM DINAMIK ================= -->
+  <div id="colModal" class="modal-backdrop">
+    <div class="card-3d modal-box">
+      <div class="modal-header">
+        <div>
+          <h3 id="colModalTitle" style="font-size:1.1rem; font-weight:800;">Pilih Kolum Paparan</h3>
+          <p style="font-size:0.82rem; color:var(--text-sub);">Tandakan kolum maklumat yang ingin dipaparkan dalam jadual.</p>
+        </div>
+        <button id="btnCloseColModal" class="btn-3d btn-white btn-sm">✕ Tutup</button>
+      </div>
+
+      <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+        <input id="colFilterInput" type="text" class="input-3d" placeholder="Cari nama kolum..." style="flex:1; min-width:180px; padding:9px 12px; font-size:0.86rem;" />
+        <button id="btnColDefault" class="btn-3d btn-white btn-sm">Lalai</button>
+        <button id="btnColAll" class="btn-3d btn-white btn-sm">Pilih Semua</button>
+        <button id="btnColClear" class="btn-3d btn-white btn-sm">Kosongkan</button>
+      </div>
+
+      <div id="colCheckboxGrid" class="col-checkbox-grid"></div>
+
+      <div style="display:flex; justify-content:flex-end; gap:10px;">
+        <button id="btnSaveCols" class="btn-3d btn-primary">✓ Guna Pilihan Kolum</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- NOTIFIKASI TOAST -->
+  <div id="toast"></div>
+
+  <script>
+    /* ========================================================================
+     * KONFIGURASI UTAMA
+     * ======================================================================== */
+    const APP_PIN = '101010';
+    // TAMPAL URL WEB APP GOOGLE APPS SCRIPT ANDA DI SINI SEBELUM UPLOAD KE GITHUB
+    const DEFAULT_GAS_URL = 'MASUKKAN_URL_WEB_APP_GAS_DI_SINI';
+    const BATCH_UPLOAD_SIZE = 500;
+
+    // Kolum lalai yang dicadangkan mengikut fail sebenar anda
+    const DEFAULT_COLS = {
+      MURID: ['NAMA', 'NOKP', 'JANTINA', 'IDKELAS', 'KETURUNAN', 'AGAMA', 'STATUS_OKU', 'SES'],
+      GURU: ['NAMA', 'JANTINA', 'JAWATAN', 'GRED_PENYANDANG', 'OPSYEN_DOMINAN', 'TELEFON'],
+      AKP: ['NAMA', 'JANTINA', 'JAWATAN', 'GRED_PENYANDANG', 'TARAF_JAWATAN', 'TELEFON']
+    };
+
+    const CAT_META = {
+      MURID: { label: 'Senarai Murid', color: '#059669' },
+      GURU:  { label: 'Senarai Guru',  color: '#4f46e5' },
+      AKP:   { label: 'Senarai AKP',   color: '#d97706' }
+    };
+
+    // Keadaan Global Aplikasi
+    const state = {
+      gasUrl: localStorage.getItem('ds_gas_url') || (DEFAULT_GAS_URL.startsWith('http') ? DEFAULT_GAS_URL : ''),
+      metadata: { headers: { MURID: [], GURU: [], AKP: [] }, counts: { MURID: 0, GURU: 0, AKP: 0 }, schools: [] },
+      currentSchool: null,
+      catMode: 'ALL',
+      selectedCols: {
+        MURID: JSON.parse(localStorage.getItem('ds_cols_MURID') || 'null'),
+        GURU:  JSON.parse(localStorage.getItem('ds_cols_GURU')  || 'null'),
+        AKP:   JSON.parse(localStorage.getItem('ds_cols_AKP')   || 'null')
+      },
+      tableState: {
+        MURID: { search: '', sortCol: -1, sortAsc: true, page: 1, pageSize: 25 },
+        GURU:  { search: '', sortCol: -1, sortAsc: true, page: 1, pageSize: 25 },
+        AKP:   { search: '', sortCol: -1, sortAsc: true, page: 1, pageSize: 25 }
+      },
+      parsedFiles: { MURID: null, GURU: null, AKP: null },
+      activeModalCat: null
+    };
+
+    /* ========================================================================
+     * UTILITI & API
+     * ======================================================================== */
+    function showToast(msg, isError = false) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.style.borderBottomColor = isError ? '#dc2626' : '#1d4ed8';
+      el.style.display = 'block';
+      clearTimeout(el._timer);
+      el._timer = setTimeout(() => { el.style.display = 'none'; }, 3800);
+    }
+
+    function setConnStatus(online, text) {
+      const wrap = document.getElementById('connStatus');
+      wrap.innerHTML = `<span class="dot ${online ? 'online' : 'offline'}"></span><span>${text}</span>`;
+    }
+
+    function escapeHtml(str) {
+      return String(str ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    async function callGAS(payload) {
+      if (!state.gasUrl || !state.gasUrl.startsWith('http')) {
+        throw new Error('URL Google Apps Script belum ditetapkan. Sila masukkan di tab Tetapan.');
+      }
+      const res = await fetch(state.gasUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ ...payload, pin: APP_PIN })
+      });
+      if (!res.ok) throw new Error('Ralat rangkaian HTTP ' + res.status);
+      const data = await res.json();
+      if (data.status === 'error') throw new Error(data.message || 'Ralat pelayan.');
+      return data;
+    }
+
+    /* ========================================================================
+     * KESELAMATAN KATA LALUAN (101010)
+     * ======================================================================== */
+    function unlockApp() {
+      const val = document.getElementById('pinInput').value.trim();
+      const err = document.getElementById('pinError');
+      if (val !== APP_PIN) {
+        err.textContent = 'Kata laluan salah. Sila cuba lagi.';
+        document.getElementById('pinInput').focus();
+        return;
+      }
+      err.textContent = '';
+      sessionStorage.setItem('ds_auth', '1');
+      document.getElementById('lockScreen').style.display = 'none';
+      document.getElementById('appShell').style.display = 'block';
+      initAfterUnlock();
+    }
+
+    document.getElementById('btnUnlock').addEventListener('click', unlockApp);
+    document.getElementById('pinInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') unlockApp();
+    });
+
+    document.getElementById('togglePinVis').addEventListener('click', () => {
+      const inp = document.getElementById('pinInput');
+      inp.type = inp.type === 'password' ? 'text' : 'password';
+    });
+
+    document.getElementById('btnLock').addEventListener('click', () => {
+      sessionStorage.removeItem('ds_auth');
+      document.getElementById('pinInput').value = '';
+      document.getElementById('appShell').style.display = 'none';
+      document.getElementById('lockScreen').style.display = 'flex';
+    });
+
+    /* ========================================================================
+     * NAVIGASI UTAMA & INISIALISASI
+     * ======================================================================== */
+    document.querySelectorAll('.nav-pill').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.nav-pill').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.view-panel').forEach(v => v.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById('view-' + btn.dataset.view).classList.add('active');
+      });
+    });
+
+    async function initAfterUnlock() {
+      document.getElementById('gasUrlInput').value = state.gasUrl;
+      if (!state.gasUrl) {
+        setConnStatus(false, 'Belum Tetap URL');
+        showToast('Sila masukkan URL Web App Google Apps Script di tab Tetapan.', true);
+        return;
+      }
+      await loadMetadata();
+    }
+
+    async function loadMetadata() {
+      setConnStatus(false, 'Memuat indeks...');
+      try {
+        const res = await callGAS({ action: 'getMetadata' });
+        state.metadata = {
+          headers: res.headers || { MURID: [], GURU: [], AKP: [] },
+          counts: res.counts || { MURID: 0, GURU: 0, AKP: 0 },
+          schools: res.schools || []
+        };
+
+        // Pastikan pilihan kolum lalai tersedia bagi setiap kategori
+        ['MURID', 'GURU', 'AKP'].forEach((cat) => {
+          const allH = state.metadata.headers[cat] || [];
+          document.getElementById('statCount' + cat).textContent =
+            (state.metadata.counts[cat] || 0).toLocaleString() + ' rekod';
+
+          if (!state.selectedCols[cat] || !state.selectedCols[cat].length) {
+            state.selectedCols[cat] = getSmartDefaultCols(cat, allH);
+          } else {
+            // Tapis sekiranya struktur kolum berubah
+            const valid = state.selectedCols[cat].filter(c => allH.includes(c));
+            state.selectedCols[cat] = valid.length ? valid : getSmartDefaultCols(cat, allH);
+          }
+        });
+
+        document.getElementById('dbSummaryText').innerHTML = `
+          <div>• <strong>Jumlah Sekolah Unik:</strong> ${state.metadata.schools.length.toLocaleString()} buah sekolah</div>
+          <div>• <strong>Rekod Murid:</strong> ${(state.metadata.counts.MURID || 0).toLocaleString()} baris (${(state.metadata.headers.MURID || []).length} kolum)</div>
+          <div>• <strong>Rekod Guru:</strong> ${(state.metadata.counts.GURU || 0).toLocaleString()} baris (${(state.metadata.headers.GURU || []).length} kolum)</div>
+          <div>• <strong>Rekod AKP:</strong> ${(state.metadata.counts.AKP || 0).toLocaleString()} baris (${(state.metadata.headers.AKP || []).length} kolum)</div>
+        `;
+
+        setConnStatus(true, `${state.metadata.schools.length} Sekolah`);
+      } catch (err) {
+        setConnStatus(false, 'Terputus');
+        showToast(err.message, true);
+      }
+    }
+
+    function getSmartDefaultCols(cat, headers) {
+      if (!headers || !headers.length) return [];
+      const wanted = DEFAULT_COLS[cat] || [];
+      const matched = wanted.filter(w => headers.includes(w));
+      return matched.length >= 2 ? matched : headers.slice(0, Math.min(6, headers.length));
+    }
+
+    /* ========================================================================
+     * CARIAN & AUTOCOMPLETE KOD SEKOLAH
+     * ======================================================================== */
+    const schoolInput = document.getElementById('schoolSearchInput');
+    const schoolDropdown = document.getElementById('schoolDropdown');
+
+    function renderSchoolSuggestions(keyword) {
+      const q = String(keyword || '').trim().toUpperCase();
+      const list = state.metadata.schools.filter(s =>
+        !q || s.kod.includes(q) || s.nama.toUpperCase().includes(q)
+      ).slice(0, 40);
+
+      if (!list.length) {
+        schoolDropdown.innerHTML = `<div style="padding:12px 15px; font-size:0.84rem; color:var(--text-muted);">Tiada sekolah sepadan ditemui dalam indeks.</div>`;
+      } else {
+        schoolDropdown.innerHTML = list.map(s => `
+          <div class="autocomplete-item" data-kod="${escapeHtml(s.kod)}">
+            <span class="autocomplete-kod">${escapeHtml(s.kod)}</span>
+            <span class="autocomplete-nama">${escapeHtml(s.nama || 'Tiada Nama Sekolah')}</span>
+          </div>
+        `).join('');
+      }
+      schoolDropdown.style.display = 'block';
+    }
+
+    schoolInput.addEventListener('focus', () => {
+      if (state.metadata.schools.length) renderSchoolSuggestions(schoolInput.value);
+    });
+
+    schoolInput.addEventListener('input', () => {
+      renderSchoolSuggestions(schoolInput.value);
+    });
+
+    schoolInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        schoolDropdown.style.display = 'none';
+        loadSelectedSchool();
+      }
+    });
+
+    schoolDropdown.addEventListener('click', (e) => {
+      const item = e.target.closest('.autocomplete-item');
+      if (!item) return;
+      schoolInput.value = item.dataset.kod;
+      schoolDropdown.style.display = 'none';
+      loadSelectedSchool();
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.autocomplete-box')) {
+        schoolDropdown.style.display = 'none';
+      }
+    });
+
+    document.getElementById('btnLoadSchool').addEventListener('click', loadSelectedSchool);
+    document.getElementById('btnRefreshMeta').addEventListener('click', async () => {
+      await loadMetadata();
+      showToast('Indeks sekolah berjaya disegarkan.');
+    });
+
+    async function loadSelectedSchool() {
+      const raw = schoolInput.value.trim();
+      if (!raw) {
+        showToast('Sila taip atau pilih Kod Sekolah terlebih dahulu.', true);
+        return;
+      }
+      // Ambil kod pertama sekiranya pengguna menaip kod + nama
+      const kod = raw.split(/\s+/)[0].toUpperCase();
+      const btn = document.getElementById('btnLoadSchool');
+      const oldHtml = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = `<span class="spinner" style="border-top-color:#fff; border-color:rgba(255,255,255,0.3);"></span> Memuat Data...`;
+
+      try {
+        const res = await callGAS({ action: 'getSchoolData', kodSekolah: kod });
+        state.currentSchool = res;
+
+        // Pastikan pilihan kolum dikemas kini dengan header sebenar
+        ['MURID', 'GURU', 'AKP'].forEach((cat) => {
+          const hdrs = res.data[cat]?.headers || [];
+          if (!state.selectedCols[cat] || !state.selectedCols[cat].some(c => hdrs.includes(c))) {
+            state.selectedCols[cat] = getSmartDefaultCols(cat, hdrs);
+          }
+          state.tableState[cat].page = 1;
+          state.tableState[cat].search = '';
+        });
+
+        renderSchoolDashboard();
+        showToast(`Data sekolah ${res.kodSekolah} berjaya dimuatkan.`);
+      } catch (err) {
+        showToast(err.message, true);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = oldHtml;
+      }
+    }
+
+    /* ========================================================================
+     * PAPARAN KPI & JADUAL PERBANDINGAN
+     * ======================================================================== */
+    function countGender(headers, rows) {
+      const jIdx = headers.findIndex(h => h.toUpperCase().includes('JANTINA'));
+      if (jIdx === -1) return { L: 0, P: 0, found: false };
+      let L = 0, P = 0;
+      rows.forEach(r => {
+        const v = String(r[jIdx] || '').trim().toUpperCase();
+        if (v === 'L' || v === 'LELAKI') L++;
+        else if (v === 'P' || v === 'PEREMPUAN') P++;
+      });
+      return { L, P, found: true };
+    }
+
+    function renderSchoolDashboard() {
+      const s = state.currentSchool;
+      if (!s) return;
+
+      document.getElementById('dashboardPlaceholder').style.display = 'none';
+      document.getElementById('schoolResultArea').style.display = 'block';
+
+      document.getElementById('resKodBadge').textContent = s.kodSekolah;
+      document.getElementById('resNamaSekolah').textContent = s.namaSekolah || 'Nama Sekolah Tidak Dinyatakan';
+
+      const mRows = s.data.MURID?.rows || [];
+      const gRows = s.data.GURU?.rows || [];
+      const aRows = s.data.AKP?.rows || [];
+
+      document.getElementById('kpiMurid').textContent = mRows.length.toLocaleString();
+      document.getElementById('kpiGuru').textContent = gRows.length.toLocaleString();
+      document.getElementById('kpiAkp').textContent = aRows.length.toLocaleString();
+
+      const mGen = countGender(s.data.MURID?.headers || [], mRows);
+      const gGen = countGender(s.data.GURU?.headers || [], gRows);
+      const aGen = countGender(s.data.AKP?.headers || [], aRows);
+
+      document.getElementById('kpiMuridMeta').textContent = mGen.found ? `Lelaki: ${mGen.L} • Perempuan: ${mGen.P}` : 'Rekod Murid Aktif';
+      document.getElementById('kpiGuruMeta').textContent = gGen.found ? `Lelaki: ${gGen.L} • Perempuan: ${gGen.P}` : 'Rekod Guru Aktif';
+      document.getElementById('kpiAkpMeta').textContent = aGen.found ? `Lelaki: ${aGen.L} • Perempuan: ${aGen.P}` : 'Rekod AKP Aktif';
+
+      const ratio = gRows.length > 0 ? (mRows.length / gRows.length).toFixed(1) : '0';
+      document.getElementById('kpiRatio').textContent = `${ratio} : 1`;
+      document.getElementById('kpiRatioMeta').textContent = `Jumlah Warga Sekolah: ${(mRows.length + gRows.length + aRows.length).toLocaleString()}`;
+
+      document.getElementById('chipMurid').textContent = mRows.length;
+      document.getElementById('chipGuru').textContent = gRows.length;
+      document.getElementById('chipAkp').textContent = aRows.length;
+
+      renderTables();
+    }
+
+    document.querySelectorAll('.cat-tab').forEach(btn => {
+      btn.addEventListener('click', () => {
+        state.catMode = btn.dataset.catmode;
+        document.querySelectorAll('.cat-tab').forEach(b => {
+          b.className = 'cat-tab';
+        });
+        const mapClass = { ALL: 'active-all', MURID: 'active-murid', GURU: 'active-guru', AKP: 'active-akp' };
+        btn.classList.add(mapClass[state.catMode]);
+        renderTables();
+      });
+    });
+
+    function renderTables() {
+      const container = document.getElementById('tablesContainer');
+      const cats = state.catMode === 'ALL' ? ['MURID', 'GURU', 'AKP'] : [state.catMode];
+      container.innerHTML = cats.map(cat => buildCategorySectionHtml(cat)).join('');
+      bindTableEvents(cats);
+    }
+
+    function buildCategorySectionHtml(cat) {
+      const dataset = state.currentSchool.data[cat] || { headers: [], rows: [] };
+      const headers = dataset.headers || [];
+      const allRows = dataset.rows || [];
+      const chosen = (state.selectedCols[cat] || []).filter(c => headers.includes(c));
+      const activeCols = chosen.length ? chosen : headers.slice(0, Math.min(6, headers.length));
+      const colIndexes = activeCols.map(c => headers.indexOf(c));
+
+      const ts = state.tableState[cat];
+      const q = ts.search.trim().toLowerCase();
+
+      // Tapis carian dalam jadual
+      let filtered = allRows;
+      if (q) {
+        filtered = allRows.filter(row =>
+          colIndexes.some(idx => String(row[idx] || '').toLowerCase().includes(q))
+        );
+      }
+
+      // Susunan kolum
+      if (ts.sortCol >= 0 && ts.sortCol < colIndexes.length) {
+        const realIdx = colIndexes[ts.sortCol];
+        filtered = [...filtered].sort((a, b) => {
+          const va = String(a[realIdx] || '');
+          const vb = String(b[realIdx] || '');
+          return ts.sortAsc
+            ? va.localeCompare(vb, 'ms', { numeric: true })
+            : vb.localeCompare(va, 'ms', { numeric: true });
+        });
+      }
+
+      // Halaman (Pagination)
+      const total = filtered.length;
+      const totalPages = Math.max(1, Math.ceil(total / ts.pageSize));
+      if (ts.page > totalPages) ts.page = totalPages;
+      const start = (ts.page - 1) * ts.pageSize;
+      const pageRows = filtered.slice(start, start + ts.pageSize);
+
+      const meta = CAT_META[cat];
+
+      let tableHtml = '';
+      if (!headers.length) {
+        tableHtml = `<div class="empty-state" style="padding:26px;">Tiada struktur data ditemui bagi kategori ${meta.label}.</div>`;
+      } else if (!total) {
+        tableHtml = `<div class="empty-state" style="padding:26px;">Tiada rekod ${meta.label.toLowerCase()} ditemui bagi sekolah ini.</div>`;
+      } else {
+        tableHtml = `
+          <div class="table-wrapper">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th style="width:52px;">Bil</th>
+                  ${activeCols.map((col, idx) => {
+                    const arrow = ts.sortCol === idx ? (ts.sortAsc ? ' ▲' : ' ▼') : '';
+                    return `<th data-sort-cat="${cat}" data-sort-idx="${idx}">${escapeHtml(col)}${arrow}</th>`;
+                  }).join('')}
+                </tr>
+              </thead>
+              <tbody>
+                ${pageRows.map((row, rIdx) => `
+                  <tr>
+                    <td style="font-weight:700; color:var(--text-muted);">${start + rIdx + 1}</td>
+                    ${colIndexes.map(cIdx => `<td>${escapeHtml(row[cIdx] || '-')}</td>`).join('')}
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+          <div class="pagination-bar">
+            <span>Memaparkan <strong>${start + 1}–${Math.min(start + ts.pageSize, total)}</strong> daripada <strong>${total}</strong> rekod (${activeCols.length} kolum dipilih)</span>
+            <div style="display:flex; gap:6px; align-items:center;">
+              <select class="select-3d" data-pagesize="${cat}" style="width:auto; padding:6px 10px; font-size:0.8rem;">
+                ${[25, 50, 100, 500].map(sz => `<option value="${sz}" ${ts.pageSize === sz ? 'selected' : ''}>${sz} / halaman</option>`).join('')}
+              </select>
+              <button class="btn-3d btn-white btn-sm" data-prev="${cat}" ${ts.page <= 1 ? 'disabled' : ''}>◀</button>
+              <span style="font-weight:700;">${ts.page} / ${totalPages}</span>
+              <button class="btn-3d btn-white btn-sm" data-next="${cat}" ${ts.page >= totalPages ? 'disabled' : ''}>▶</button>
+            </div>
+          </div>
+        `;
+      }
+
+      return `
+        <div class="card-3d data-section">
+          <div class="data-section-header">
+            <div class="section-title-group">
+              <div class="section-pill" style="background:${meta.color};"></div>
+              <div>
+                <h3 style="font-size:1.02rem; font-weight:800;">${meta.label}</h3>
+                <span style="font-size:0.78rem; color:var(--text-muted);">${allRows.length} rekod keseluruhan</span>
+              </div>
+            </div>
+            <div class="section-tools">
+              <input type="text" class="input-3d mini-search" data-search="${cat}" value="${escapeHtml(ts.search)}" placeholder="Tapis dalam ${meta.label.toLowerCase()}..." />
+              <button class="btn-3d btn-white btn-sm" data-open-cols="${cat}">⚙️ Pilih Kolum (${activeCols.length})</button>
+            </div>
+          </div>
+          ${tableHtml}
+        </div>
+      `;
+    }
+
+    function bindTableEvents(cats) {
+      cats.forEach(cat => {
+        const searchEl = document.querySelector(`[data-search="${cat}"]`);
+        if (searchEl) {
+          searchEl.addEventListener('input', (e) => {
+            state.tableState[cat].search = e.target.value;
+            state.tableState[cat].page = 1;
+            renderTables();
+            // Kekalkan fokus input carian
+            const refocused = document.querySelector(`[data-search="${cat}"]`);
+            if (refocused) {
+              refocused.focus();
+              refocused.setSelectionRange(refocused.value.length, refocused.value.length);
+            }
+          });
+        }
+
+        const colBtn = document.querySelector(`[data-open-cols="${cat}"]`);
+        if (colBtn) {
+          colBtn.addEventListener('click', () => openColumnModal(cat));
+        }
+
+        const psEl = document.querySelector(`[data-pagesize="${cat}"]`);
+        if (psEl) {
+          psEl.addEventListener('change', (e) => {
+            state.tableState[cat].pageSize = Number(e.target.value);
+            state.tableState[cat].page = 1;
+            renderTables();
+          });
+        }
+
+        const prevBtn = document.querySelector(`[data-prev="${cat}"]`);
+        if (prevBtn) {
+          prevBtn.addEventListener('click', () => {
+            state.tableState[cat].page = Math.max(1, state.tableState[cat].page - 1);
+            renderTables();
+          });
+        }
+
+        const nextBtn = document.querySelector(`[data-next="${cat}"]`);
+        if (nextBtn) {
+          nextBtn.addEventListener('click', () => {
+            state.tableState[cat].page++;
+            renderTables();
+          });
+        }
+      });
+
+      document.querySelectorAll('[data-sort-cat]').forEach(th => {
+        th.addEventListener('click', () => {
+          const cat = th.dataset.sortCat;
+          const idx = Number(th.dataset.sortIdx);
+          const ts = state.tableState[cat];
+          if (ts.sortCol === idx) ts.sortAsc = !ts.sortAsc;
+          else { ts.sortCol = idx; ts.sortAsc = true; }
+          renderTables();
+        });
+      });
+    }
+
+    /* ========================================================================
+     * MODAL PEMILIH KOLUM DINAMIK
+     * ======================================================================== */
+    function openColumnModal(cat) {
+      state.activeModalCat = cat;
+      const headers = state.currentSchool?.data[cat]?.headers || state.metadata.headers[cat] || [];
+      const selected = new Set(state.selectedCols[cat] || []);
+
+      document.getElementById('colModalTitle').textContent = `Pilih Kolum Paparan — ${CAT_META[cat].label}`;
+      document.getElementById('colFilterInput').value = '';
+
+      const grid = document.getElementById('colCheckboxGrid');
+      grid.innerHTML = headers.map(h => `
+        <label class="col-chip" data-col-label="${escapeHtml(h.toUpperCase())}">
+          <input type="checkbox" value="${escapeHtml(h)}" ${selected.has(h) ? 'checked' : ''} />
+          <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(h)}">${escapeHtml(h)}</span>
+        </label>
+      `).join('');
+
+      document.getElementById('colModal').classList.add('open');
+    }
+
+    document.getElementById('colFilterInput').addEventListener('input', (e) => {
+      const q = e.target.value.trim().toUpperCase();
+      document.querySelectorAll('#colCheckboxGrid .col-chip').forEach(chip => {
+        chip.style.display = chip.dataset.colLabel.includes(q) ? 'flex' : 'none';
+      });
+    });
+
+    document.getElementById('btnColAll').addEventListener('click', () => {
+      document.querySelectorAll('#colCheckboxGrid input[type="checkbox"]').forEach(cb => cb.checked = true);
+    });
+
+    document.getElementById('btnColClear').addEventListener('click', () => {
+      document.querySelectorAll('#colCheckboxGrid input[type="checkbox"]').forEach(cb => cb.checked = false);
+    });
+
+    document.getElementById('btnColDefault').addEventListener('click', () => {
+      const cat = state.activeModalCat;
+      const headers = state.currentSchool?.data[cat]?.headers || state.metadata.headers[cat] || [];
+      const defaults = new Set(getSmartDefaultCols(cat, headers));
+      document.querySelectorAll('#colCheckboxGrid input[type="checkbox"]').forEach(cb => {
+        cb.checked = defaults.has(cb.value);
+      });
+    });
+
+    document.getElementById('btnCloseColModal').addEventListener('click', () => {
+      document.getElementById('colModal').classList.remove('open');
+    });
+
+    document.getElementById('btnSaveCols').addEventListener('click', () => {
+      const cat = state.activeModalCat;
+      const checked = Array.from(document.querySelectorAll('#colCheckboxGrid input[type="checkbox"]:checked'))
+        .map(cb => cb.value);
+
+      if (!checked.length) {
+        showToast('Sila pilih sekurang-kurangnya satu kolum.', true);
+        return;
+      }
+
+      state.selectedCols[cat] = checked;
+      localStorage.setItem('ds_cols_' + cat, JSON.stringify(checked));
+      state.tableState[cat].sortCol = -1;
+      document.getElementById('colModal').classList.remove('open');
+      renderTables();
+      showToast(`Pilihan ${checked.length} kolum untuk ${CAT_META[cat].label} disimpan.`);
+    });
+
+    /* ========================================================================
+     * EKSPORT LAPORAN SEKOLAH KE EXCEL & CETAK
+     * ======================================================================== */
+    document.getElementById('btnExportSchool').addEventListener('click', () => {
+      if (!state.currentSchool) return;
+      const wb = XLSX.utils.book_new();
+
+      ['MURID', 'GURU', 'AKP'].forEach(cat => {
+        const ds = state.currentSchool.data[cat] || { headers: [], rows: [] };
+        const chosen = (state.selectedCols[cat] || []).filter(c => ds.headers.includes(c));
+        const activeCols = chosen.length ? chosen : ds.headers;
+        const idxs = activeCols.map(c => ds.headers.indexOf(c));
+
+        const aoa = [activeCols];
+        ds.rows.forEach(r => aoa.push(idxs.map(i => r[i] ?? '')));
+
+        const ws = XLSX.utils.aoa_to_sheet(aoa);
+        XLSX.utils.book_append_sheet(wb, ws, cat);
+      });
+
+      const fname = `Laporan_${state.currentSchool.kodSekolah}_${new Date().toISOString().slice(0,10)}.xlsx`;
+      XLSX.writeFile(wb, fname);
+      showToast(`Fail ${fname} berjaya dimuat turun.`);
+    });
+
+    document.getElementById('btnPrintSchool').addEventListener('click', () => window.print());
+
+    /* ========================================================================
+     * MUAT NAIK FAIL EXCEL SECARA BERPERINGKAT (BATCH UPLOAD)
+     * ======================================================================== */
+    ['MURID', 'GURU', 'AKP'].forEach(cat => {
+      const inputEl = document.getElementById('file' + cat);
+      const dropzone = inputEl.closest('.dropzone');
+      const btnUpload = document.getElementById('btnUpload' + cat);
+
+      dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('dragover'); });
+      dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+      dropzone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropzone.classList.remove('dragover');
+        if (e.dataTransfer.files.length) handleExcelFile(cat, e.dataTransfer.files[0]);
+      });
+
+      inputEl.addEventListener('change', (e) => {
+        if (e.target.files.length) handleExcelFile(cat, e.target.files[0]);
+      });
+
+      btnUpload.addEventListener('click', () => runBatchUpload(cat));
+    });
+
+    function handleExcelFile(cat, file) {
+      const infoEl = document.getElementById('info' + cat);
+      const btnUpload = document.getElementById('btnUpload' + cat);
+      infoEl.innerHTML = `<span class="spinner"></span> Membaca fail <strong>${escapeHtml(file.name)}</strong>...`;
+      btnUpload.disabled = true;
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = new Uint8Array(e.target.result);
+          const wb = XLSX.read(data, { type: 'array', raw: false });
+          const firstSheet = wb.SheetNames[0];
+          const aoa = XLSX.utils.sheet_to_json(wb.Sheets[firstSheet], { header: 1, defval: '' });
+
+          if (aoa.length < 2) {
+            throw new Error('Fail kosong atau tidak mengandungi baris data.');
+          }
+
+          const headers = aoa[0].map(h => String(h || '').trim());
+          const rows = aoa.slice(1).filter(r => r.some(cell => String(cell).trim() !== ''));
+
+          const hasKod = headers.some(h => h.toUpperCase().replace(/[^A-Z0-9]/g, '').includes('KODSEKOLAH'));
+          state.parsedFiles[cat] = { fileName: file.name, headers, rows };
+
+          infoEl.innerHTML = `
+            <strong>${escapeHtml(file.name)}</strong><br/>
+            ${rows.length.toLocaleString()} baris • ${headers.length} kolum
+            ${hasKod ? ' • <span style="color:#059669;font-weight:700;">✓ KODSEKOLAH dikesan</span>' : ' • <span style="color:#d97706;font-weight:700;">⚠ Sila pastikan kolum KODSEKOLAH wujud</span>'}
+          `;
+          document.getElementById('prog' + cat).style.width = '0%';
+          document.getElementById('progText' + cat).textContent = 'Sedia untuk muat naik';
+          btnUpload.disabled = false;
+        } catch (err) {
+          infoEl.innerHTML = `<span style="color:var(--danger);">Ralat fail: ${escapeHtml(err.message)}</span>`;
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    async function runBatchUpload(cat) {
+      const parsed = state.parsedFiles[cat];
+      if (!parsed) return;
+
+      const mode = document.querySelector('input[name="uploadMode"]:checked').value;
+      const btn = document.getElementById('btnUpload' + cat);
+      const progBar = document.getElementById('prog' + cat);
+      const progTxt = document.getElementById('progText' + cat);
+
+      btn.disabled = true;
+      const totalRows = parsed.rows.length;
+      const totalBatches = Math.ceil(totalRows / BATCH_UPLOAD_SIZE);
+
+      try {
+        for (let b = 0; b < totalBatches; b++) {
+          const chunk = parsed.rows.slice(b * BATCH_UPLOAD_SIZE, (b + 1) * BATCH_UPLOAD_SIZE);
+          progTxt.textContent = `Menghantar batch ${b + 1} / ${totalBatches} (${Math.min((b + 1) * BATCH_UPLOAD_SIZE, totalRows).toLocaleString()} baris)...`;
+
+          await callGAS({
+            action: 'uploadBatch',
+            category: cat,
+            mode: mode,
+            batchIndex: b,
+            headers: parsed.headers,
+            rows: chunk
+          });
+
+          const pct = Math.round(((b + 1) / totalBatches) * 100);
+          progBar.style.width = pct + '%';
+        }
+
+        progTxt.textContent = `Selesai! ${totalRows.toLocaleString()} rekod berjaya disimpan ke Google Sheet.`;
+        showToast(`Muat naik Data ${cat} selesai (${totalRows.toLocaleString()} baris).`);
+        await loadMetadata();
+      } catch (err) {
+        progTxt.textContent = 'Ralat: ' + err.message;
+        showToast('Gagal muat naik: ' + err.message, true);
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    /* ========================================================================
+     * TETAPAN & SERVICE WORKER PWA
+     * ======================================================================== */
+    document.getElementById('btnSaveGasUrl').addEventListener('click', async () => {
+      const url = document.getElementById('gasUrlInput').value.trim();
+      if (!url.startsWith('https://script.google.com/')) {
+        showToast('Sila masukkan URL Google Apps Script yang sah (bermula dengan https://script.google.com/).', true);
+        return;
+      }
+      state.gasUrl = url;
+      localStorage.setItem('ds_gas_url', url);
+      showToast('URL disimpan. Menguji sambungan...');
+      await loadMetadata();
+    });
+
+    document.getElementById('btnResetCols').addEventListener('click', () => {
+      ['MURID', 'GURU', 'AKP'].forEach(cat => {
+        localStorage.removeItem('ds_cols_' + cat);
+        state.selectedCols[cat] = getSmartDefaultCols(cat, state.metadata.headers[cat] || []);
+      });
+      if (state.currentSchool) renderTables();
+      showToast('Pilihan kolum telah ditetapkan semula kepada tetapan lalai.');
+    });
+
+    // Daftar Service Worker untuk PWA
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js').catch(() => {});
+      });
+    }
+
+    // Semak sesi log masuk semasa halaman dimuatkan
+    window.addEventListener('DOMContentLoaded', () => {
+      if (sessionStorage.getItem('ds_auth') === '1') {
+        document.getElementById('lockScreen').style.display = 'none';
+        document.getElementById('appShell').style.display = 'block';
+        initAfterUnlock();
+      } else {
+        document.getElementById('pinInput').focus();
+      }
+    });
+  </script>
+</body>
+</html>
