@@ -2,7 +2,7 @@
 <html lang="ms">
 <head>
   <meta charset="UTF-8" />
-  <script>window.GAS_URL = 'https://script.google.com/macros/s/AKfycbyjQcylEJyAoqjGt4pSOCIfjMKWW8SCHbE2EVEPk8SzW1QLCLjT3vXli7YyvMv8knEjHA/exec'; /* URL Web App Google Apps Script (KEKAL untuk semua pengguna) */</script>
+  <script>window.GAS_URL = 'https://script.google.com/macros/s/AKfycbxQ-iDz0432i1j4DZ6sBADjJcg0ca-z3-nO34aMsgEpG6Deio5gqZ0o4xbY5LU3mRrhvw/exec'; /* URL Web App Google Apps Script (KEKAL untuk semua pengguna) */</script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#ffffff" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -366,6 +366,20 @@
       align-items: end;
     }
 
+    .adv-summary { cursor: pointer; margin: 0; }
+    .adv-body { margin-top: 14px; display: flex; flex-direction: column; gap: 12px; }
+    .adv-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+    .adv-chk { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; cursor: pointer; }
+    .adv-chk input { width: 18px; height: 18px; }
+    .adv-sel { width: auto; min-width: 160px; flex: 1 1 160px; }
+    .adv-cond { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+    .adv-cond .input-3d { flex: 2 1 160px; width: auto; }
+    .adv-res-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+    .adv-res-card { border: 1px solid var(--border, #e2e8f0); border-radius: 12px; padding: 14px; }
+    .adv-res-num { font-size: 1.8rem; font-weight: 800; }
+    .adv-res-card table { width: 100%; font-size: 0.85rem; margin-top: 8px; border-collapse: collapse; }
+    .adv-res-card td { padding: 3px 0; border-top: 1px solid var(--border, #eef2f7); }
+    .adv-res-card td:last-child { text-align: right; font-weight: 700; }
     .field-label {
       display: block;
       font-size: 0.8rem;
@@ -957,6 +971,29 @@
         </div>
       </div>
 
+      <!-- CARIAN MELUAS SELURUH NEGARA -->
+      <div class="card-3d search-panel" id="advPanel">
+        <details id="advDetails">
+          <summary class="field-label adv-summary">🔎 Carian Meluas — kira jumlah dalam semua data (seluruh Malaysia)</summary>
+          <div class="adv-body">
+            <div class="adv-row">
+              <span class="field-label" style="margin:0;">Cari dalam:</span>
+              <label class="adv-chk"><input type="checkbox" data-adv-cat="MURID"> Murid</label>
+              <label class="adv-chk"><input type="checkbox" data-adv-cat="GURU"> Guru</label>
+              <label class="adv-chk"><input type="checkbox" data-adv-cat="AKP"> AKP</label>
+            </div>
+            <div id="advConds"></div>
+            <div class="adv-row">
+              <button type="button" id="advAddCond" class="btn-3d btn-white btn-sm">＋ Tambah Syarat</button>
+              <label class="field-label" style="margin:0;" for="advGroup">Pecahan ikut:</label>
+              <select id="advGroup" class="select-3d adv-sel"></select>
+              <button type="button" id="advRun" class="btn-3d btn-primary">📊 Kira Jumlah</button>
+            </div>
+            <div id="advResult"></div>
+          </div>
+        </details>
+      </div>
+
       <!-- KEADAAN KOSONG SEBELUM CARIAN -->
       <div id="dashboardPlaceholder" class="card-3d empty-state">
         <div style="font-size:2.6rem; margin-bottom:10px;">🏫</div>
@@ -1192,13 +1229,23 @@
         AKP:   JSON.parse(localStorage.getItem('ds_cols_AKP')   || 'null')
       },
       tableState: {
-        MURID: { search: '', sortKey: null, sortAsc: true, filters: {}, page: 1, pageSize: 25 },
-        GURU:  { search: '', sortKey: null, sortAsc: true, filters: {}, page: 1, pageSize: 25 },
-        AKP:   { search: '', sortKey: null, sortAsc: true, filters: {}, page: 1, pageSize: 25 }
+        MURID: { search: '', sortKey: loadSort('MURID').k, sortAsc: loadSort('MURID').a, filters: {}, page: 1, pageSize: 25 },
+        GURU:  { search: '', sortKey: loadSort('GURU').k, sortAsc: loadSort('GURU').a, filters: {}, page: 1, pageSize: 25 },
+        AKP:   { search: '', sortKey: loadSort('AKP').k, sortAsc: loadSort('AKP').a, filters: {}, page: 1, pageSize: 25 }
       },
       parsedFiles: { MURID: null, GURU: null, AKP: null },
       activeModalCat: null
     };
+
+    function loadSort(cat) {
+      try { const v = JSON.parse(localStorage.getItem('ds_sort_' + cat) || 'null'); if (v && v.k) return { k: v.k, a: v.a !== false }; } catch (e) {}
+      return { k: null, a: true };
+    }
+    function saveSorts() {
+      try { ['MURID','GURU','AKP'].forEach(c => { const t = state.tableState[c];
+        if (t.sortKey) localStorage.setItem('ds_sort_' + c, JSON.stringify({ k: t.sortKey, a: t.sortAsc }));
+        else localStorage.removeItem('ds_sort_' + c); }); } catch (e) {}
+    }
 
     /* ========================================================================
      * UTILITI & API
@@ -1433,6 +1480,7 @@
           counts: res.counts || { MURID: 0, GURU: 0, AKP: 0 },
           schools: res.schools || []
         };
+        if (window.renderAdvPanel) setTimeout(window.renderAdvPanel, 0);
 
         // Pastikan pilihan kolum lalai tersedia bagi setiap kategori
         ['MURID', 'GURU', 'AKP'].forEach((cat) => {
@@ -1606,8 +1654,6 @@
         if (!sameSchool) {
           state.tableState[cat].page = 1;
           state.tableState[cat].search = '';
-          state.tableState[cat].sortKey = null;
-          state.tableState[cat].sortAsc = true;
           state.tableState[cat].filters = {};
         }
       });
@@ -1760,6 +1806,7 @@
     });
 
     function renderTables() {
+      saveSorts();
       const container = document.getElementById('tablesContainer');
       const cats = state.catMode === 'ALL' ? ['MURID', 'GURU', 'AKP'] : [state.catMode];
       container.innerHTML = cats.map(cat => buildCategorySectionHtml(cat)).join('');
@@ -2125,7 +2172,8 @@
       filterMenu.style.left = left + 'px';
       filterMenu.style.top = top + 'px';
       const searchEl = filterMenu.querySelector('.fm-search');
-      if (searchEl) searchEl.focus({ preventScroll: true });
+      if (searchEl && window.matchMedia('(hover: hover) and (pointer: fine)').matches) searchEl.focus({ preventScroll: true });
+      filterMenu._openedAt = Date.now(); filterMenu._w = window.innerWidth;
     }
 
     document.addEventListener('click', (e) => {
@@ -2135,9 +2183,101 @@
     });
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeFilterMenu(); });
     document.addEventListener('scroll', (e) => {
-      if (filterMenu.classList.contains('open') && !filterMenu.contains(e.target)) closeFilterMenu();
+      if (!filterMenu.classList.contains('open') || filterMenu.contains(e.target)) return;
+      if (Date.now() - (filterMenu._openedAt || 0) < 600) return;
+      if (document.activeElement && filterMenu.contains(document.activeElement)) return;
+      closeFilterMenu();
     }, true);
-    window.addEventListener('resize', closeFilterMenu);
+    window.addEventListener('resize', () => {
+      // Papan kekunci telefon ubah tinggi sahaja - jangan tutup menu
+      if (!filterMenu.classList.contains('open')) return;
+      if (Math.abs(window.innerWidth - (filterMenu._w || 0)) < 50) return;
+      closeFilterMenu();
+    });
+
+
+    /* ========================================================================
+     * CARIAN MELUAS (STATISTIK SELURUH NEGARA) - pilihan disimpan dalam peranti
+     * ======================================================================== */
+    (function () {
+      const LS = 'ds_adv_v1';
+      let adv = { cats: ['MURID'], conds: [{ col: '', mode: 'contains', value: '' }], groupBy: '', open: false };
+      try { adv = Object.assign(adv, JSON.parse(localStorage.getItem(LS) || '{}')); } catch (e) {}
+      const save = () => { try { localStorage.setItem(LS, JSON.stringify(adv)); } catch (e) {} };
+      const det = document.getElementById('advDetails');
+      det.open = !!adv.open;
+      det.addEventListener('toggle', () => { adv.open = det.open; save(); if (det.open) renderAdv(); });
+
+      function allCols() {
+        const set = new Set();
+        adv.cats.forEach(c => (state.metadata.headers[c] || []).forEach(h => h && set.add(h)));
+        return [...set];
+      }
+      function opts(cols, sel, blank) {
+        return (blank ? `<option value="">${blank}</option>` : '') +
+          cols.map(c => `<option value="${escapeHtml(c)}" ${c === sel ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('');
+      }
+      function renderAdv() {
+        document.querySelectorAll('[data-adv-cat]').forEach(cb => { cb.checked = adv.cats.includes(cb.dataset.advCat); });
+        const cols = allCols();
+        document.getElementById('advConds').innerHTML = adv.conds.map((c, i) => `
+          <div class="adv-cond">
+            <select class="select-3d adv-sel" data-ci="${i}" data-f="col">${opts(cols, c.col, '— Pilih kolum —')}</select>
+            <select class="select-3d adv-sel" style="flex:0 1 150px" data-ci="${i}" data-f="mode">
+              <option value="contains" ${c.mode === 'contains' ? 'selected' : ''}>mengandungi</option>
+              <option value="equals" ${c.mode === 'equals' ? 'selected' : ''}>sama dengan</option>
+              <option value="notempty" ${c.mode === 'notempty' ? 'selected' : ''}>tidak kosong</option>
+            </select>
+            <input class="input-3d" data-ci="${i}" data-f="value" value="${escapeHtml(c.value || '')}" placeholder="Contoh: OKU, PEREMPUAN, KEDAH" ${c.mode === 'notempty' ? 'disabled' : ''}>
+            <button type="button" class="btn-3d btn-white btn-sm" data-cdel="${i}" title="Buang syarat">✕</button>
+          </div>`).join('') || '<div style="color:#64748b;font-size:.9rem;">Tiada syarat — akan kira semua rekod.</div>';
+        document.getElementById('advGroup').innerHTML = opts(cols, adv.groupBy, 'Tiada (jumlah sahaja)');
+        document.querySelectorAll('#advConds [data-ci]').forEach(el => el.addEventListener('change', () => {
+          adv.conds[+el.dataset.ci][el.dataset.f] = el.value; save();
+          if (el.dataset.f === 'mode') renderAdv();
+        }));
+        document.querySelectorAll('#advConds [data-cdel]').forEach(b => b.addEventListener('click', () => {
+          adv.conds.splice(+b.dataset.cdel, 1); save(); renderAdv();
+        }));
+      }
+      window.renderAdvPanel = renderAdv;
+      document.querySelectorAll('[data-adv-cat]').forEach(cb => cb.addEventListener('change', () => {
+        adv.cats = [...document.querySelectorAll('[data-adv-cat]:checked')].map(x => x.dataset.advCat);
+        save(); renderAdv();
+      }));
+      document.getElementById('advAddCond').addEventListener('click', () => {
+        adv.conds.push({ col: '', mode: 'contains', value: '' }); save(); renderAdv();
+      });
+      document.getElementById('advGroup').addEventListener('change', e => { adv.groupBy = e.target.value; save(); });
+      document.getElementById('advRun').addEventListener('click', async () => {
+        if (!adv.cats.length) { showToast('Sila tick sekurang-kurangnya satu data.', true); return; }
+        const conds = adv.conds.filter(c => c.col && (c.mode === 'notempty' || String(c.value || '').trim()));
+        const out = document.getElementById('advResult');
+        const btn = document.getElementById('advRun');
+        btn.disabled = true; out.innerHTML = '<div style="color:#64748b;">⏳ Mengira dalam semua data... (kali pertama boleh ambil masa beberapa saat)</div>';
+        try {
+          const res = await callGAS({ action: 'queryStats', categories: adv.cats, conditions: conds, groupBy: adv.groupBy });
+          const fmt = n => Number(n).toLocaleString('ms-MY');
+          const desc = conds.length ? conds.map(c => `${escapeHtml(c.col)} ${c.mode === 'equals' ? '=' : c.mode === 'notempty' ? 'tidak kosong' : 'mengandungi'} ${c.mode === 'notempty' ? '' : '"' + escapeHtml(c.value) + '"'}`).join(' DAN ') : 'Semua rekod';
+          out.innerHTML = `<div style="font-size:.85rem;color:#64748b;margin-bottom:8px;">Syarat: ${desc}</div><div class="adv-res-grid">` +
+            adv.cats.map(cat => {
+              const r = res.results[cat] || {};
+              if (r.count == null) return `<div class="adv-res-card"><b>${CAT_META[cat].label}</b><div style="color:#dc2626;margin-top:6px;">Kolum tiada dalam data ini: ${escapeHtml((r.missing || []).join(', '))}</div></div>`;
+              const groups = Object.entries(r.groups || {}).sort((a, b) => b[1] - a[1]);
+              return `<div class="adv-res-card" style="border-top:4px solid ${CAT_META[cat].color}">
+                <b>${CAT_META[cat].label}</b>
+                <div class="adv-res-num" style="color:${CAT_META[cat].color}">${fmt(r.count)}</div>
+                <div style="font-size:.8rem;color:#64748b;">daripada ${fmt(r.total)} rekod</div>
+                ${groups.length ? `<table>${groups.map(([k, v]) => `<tr><td>${escapeHtml(k)}</td><td>${fmt(v)}</td></tr>`).join('')}</table>` : ''}
+                ${(r.missing || []).length ? `<div style="color:#d97706;font-size:.8rem;margin-top:6px;">Kolum pecahan tiada: ${escapeHtml(r.missing.join(', '))}</div>` : ''}
+              </div>`;
+            }).join('') + '</div>';
+        } catch (err) {
+          out.innerHTML = `<div style="color:#dc2626;">Gagal: ${escapeHtml(err.message || String(err))}</div>`;
+        } finally { btn.disabled = false; }
+      });
+      renderAdv();
+    })();
 
     /* ========================================================================
      * MODAL PEMILIH KOLUM DINAMIK

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'dashboard-sekolah-v6';
+const CACHE_NAME = 'dashboard-sekolah-v8';
 const APP_SHELL = [
   './',
   './index.html',

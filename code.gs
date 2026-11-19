@@ -86,6 +86,10 @@ function doPost(e) {
       return jsonResponse_(handleGetSchoolData_(req.kodSekolah, req.refresh === true));
     }
 
+    if (action === 'queryStats') {
+      return jsonResponse_(handleQueryStats_(req));
+    }
+
     if (action === 'uploadBatch') {
       return jsonResponse_(handleUploadBatch_(req));
     }
@@ -719,4 +723,73 @@ function jsonResponse_(obj) {
   return ContentService
     .createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+
+/**
+ * ============================================================================
+ * CARIAN MELUAS / STATISTIK SELURUH NEGARA
+ * req.categories: ['MURID','GURU','AKP'] (pilih mana-mana)
+ * req.conditions: [{ col, value, mode: 'contains'|'equals'|'notempty' }] (semua mesti padan)
+ * req.groupBy: nama kolum (pilihan) untuk pecahan, cth. NEGERI
+ * ============================================================================
+ */
+function handleQueryStats_(req) {
+  const cats = (req.categories || []).filter(function (c) { return ['MURID', 'GURU', 'AKP'].indexOf(c) !== -1; });
+  if (!cats.length) return { status: 'error', message: 'Sila pilih sekurang-kurangnya satu data.' };
+  const conds = (req.conditions || []).filter(function (c) { return c && c.col; }).slice(0, 6);
+  const groupBy = String(req.groupBy || '').trim();
+
+  const cache = CacheService.getScriptCache();
+  const ck = 'Q' + getDataVersion_() + '|' + Utilities.base64EncodeWebSafe(
+    Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, JSON.stringify([cats, conds, groupBy])));
+  const hit = cache.get(ck);
+  if (hit && !req.refresh) { try { return JSON.parse(hit); } catch (e) {} }
+
+  const norm = function (v) { return String(v == null ? '' : v).trim().toUpperCase(); };
+  const results = {};
+  cats.forEach(function (cat) {
+    const sheet = getTargetSheet_(cat);
+    const lastRow = sheet.getLastRow(), lastCol = sheet.getLastColumn();
+    const res = { total: Math.max(0, lastRow - 1), count: 0, groups: {}, missing: [] };
+    results[cat] = res;
+    if (lastRow < 2 || lastCol < 1) return;
+    const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(function (h) { return String(h || '').trim(); });
+    const colOf = function (name) {
+      let i = headers.indexOf(name);
+      if (i === -1) { const n = norm(name); i = headers.findIndex(function (h) { return norm(h) === n; }); }
+      return i;
+    };
+    const readCol = function (i) { return sheet.getRange(2, i + 1, lastRow - 1, 1).getValues(); };
+    const condCols = [];
+    conds.forEach(function (c) {
+      const i = colOf(c.col);
+      if (i === -1) res.missing.push(c.col);
+      else condCols.push({ vals: readCol(i), value: norm(c.value), mode: c.mode || 'contains' });
+    });
+    if (res.missing.length) { res.count = null; return; }
+    let gVals = null;
+    if (groupBy) {
+      const gi = colOf(groupBy);
+      if (gi === -1) res.missing.push(groupBy); else gVals = readCol(gi);
+    }
+    for (let r = 0; r < lastRow - 1; r++) {
+      let ok = true;
+      for (let k = 0; k < condCols.length && ok; k++) {
+        const cc = condCols[k], v = norm(cc.vals[r][0]);
+        if (cc.mode === 'equals') ok = v === cc.value;
+        else if (cc.mode === 'notempty') ok = v !== '';
+        else ok = v.indexOf(cc.value) !== -1;
+      }
+      if (!ok) continue;
+      res.count++;
+      if (gVals) {
+        const gk = String(gVals[r][0] == null ? '' : gVals[r][0]).trim() || '(Kosong)';
+        res.groups[gk] = (res.groups[gk] || 0) + 1;
+      }
+    }
+  });
+  const out = { status: 'success', results: results, builtAt: new Date().toISOString() };
+  try { const s = JSON.stringify(out); if (s.length < 95000) cache.put(ck, s, 21600); } catch (e) {}
+  return out;
 }
