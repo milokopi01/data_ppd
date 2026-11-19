@@ -445,14 +445,15 @@ function scAddEntries_(base, obj, out) {
   out[base + '#n'] = String(n);
 }
 
-function scPutMany_(entries) {
+function scPutMany_(entries, ttl) {
   const cache = CacheService.getScriptCache();
+  const TTL = ttl || SC_TTL;
   let batch = {}, size = 0, count = 0;
   const send = function () {
     if (!count) return;
-    try { cache.putAll(batch, SC_TTL); }
+    try { cache.putAll(batch, TTL); }
     catch (e) {
-      Object.keys(batch).forEach(function (k) { try { cache.put(k, batch[k], SC_TTL); } catch (e2) {} });
+      Object.keys(batch).forEach(function (k) { try { cache.put(k, batch[k], TTL); } catch (e2) {} });
     }
     batch = {}; size = 0; count = 0;
   };
@@ -742,6 +743,68 @@ function jsonResponse_(obj) {
  * req.groupBy: nama kolum (pilihan) untuk pecahan, cth. NEGERI
  * ============================================================================
  */
+/**
+ * ============================================================================
+ * PEMBACA KOLUM PANTAS (dikongsi oleh Kira Jumlah, Pilih Nilai & Papar Senarai)
+ * - Kolum yang bersebelahan dibaca dalam SATU panggilan (bukan satu demi satu).
+ * - Setiap kolum disimpan (dimampatkan) dalam cache 15 minit. Kunci cache
+ *   mengandungi versi data + bilangan baris/kolum, jadi bila data dimuat naik
+ *   atau baris ditambah, data lama tidak akan dipakai (keputusan kekal tepat).
+ * Pulangkan { indeksKolum: [nilai seperti dipaparkan dalam Sheet, ...] }
+ * ============================================================================
+ */
+const COL_TTL = 900;          // 15 minit
+const COL_MAX_CHUNKS = 12;    // kolum terlalu besar tidak dicache
+
+function readColsDisp_(cat, sheet, idxList, lastRow, lastCol) {
+  const n = lastRow - 1;
+  const out = {};
+  const uniq = (idxList || []).filter(function (i, k, a) { return i >= 0 && a.indexOf(i) === k; });
+  if (!uniq.length || n < 1) return out;
+  const ver = getDataVersion_();
+  const baseOf = function (i) { return 'C' + ver + '|' + cat + '|' + lastRow + 'x' + lastCol + '|' + i; };
+
+  const hits = scGetMany_(uniq.map(baseOf));
+  const missing = [];
+  uniq.forEach(function (i) {
+    const h = hits[baseOf(i)];
+    if (Array.isArray(h) && h.length === n) out[i] = h; else missing.push(i);
+  });
+  if (!missing.length) return out;
+
+  // Kumpul kolum berdekatan (jarak <= 3) supaya dibaca sekali gus
+  missing.sort(function (a, b) { return a - b; });
+  const runs = [];
+  let s0 = missing[0], e0 = missing[0];
+  for (let k = 1; k < missing.length; k++) {
+    if (missing[k] - e0 <= 3) e0 = missing[k];
+    else { runs.push([s0, e0]); s0 = e0 = missing[k]; }
+  }
+  runs.push([s0, e0]);
+
+  const want = {};
+  missing.forEach(function (i) { want[i] = true; });
+  const entries = {};
+  runs.forEach(function (run) {
+    const st = run[0], en = run[1];
+    const block = sheet.getRange(2, st + 1, n, en - st + 1).getDisplayValues();
+    for (let c = st; c <= en; c++) {
+      if (!want[c]) continue;
+      const j = c - st;
+      const col = new Array(n);
+      for (let r = 0; r < n; r++) col[r] = block[r][j];
+      out[c] = col;
+      try {
+        const tmp = {};
+        scAddEntries_(baseOf(c), col, tmp);
+        if (Number(tmp[baseOf(c) + '#n']) <= COL_MAX_CHUNKS) Object.keys(tmp).forEach(function (k) { entries[k] = tmp[k]; });
+      } catch (e) {}
+    }
+  });
+  if (Object.keys(entries).length) { try { scPutMany_(entries, COL_TTL); } catch (e) {} }
+  return out;
+}
+
 function handleQueryStats_(req) {
   const cats = (req.categories || []).filter(function (c) { return ['MURID', 'GURU', 'AKP'].indexOf(c) !== -1; });
   if (!cats.length) return { status: 'error', message: 'Sila pilih sekurang-kurangnya satu data.' };
@@ -749,7 +812,8 @@ function handleQueryStats_(req) {
   const groupBy = String(req.groupBy || '').trim();
 
   const cache = CacheService.getScriptCache();
-  const ck = 'Q2|' + getDataVersion_() + '|' + Utilities.base64EncodeWebSafe(
+  const shape = cats.map(function (c) { const sh = getTargetSheet_(c); return sh.getLastRow() + 'x' + sh.getLastColumn(); }).join(',');
+  const ck = 'Q3|' + getDataVersion_() + '|' + shape + '|' + Utilities.base64EncodeWebSafe(
     Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, JSON.stringify([cats, conds, groupBy])));
   const hit = cache.get(ck);
   if (hit && !req.refresh) { try { return JSON.parse(hit); } catch (e) {} }
@@ -768,38 +832,36 @@ function handleQueryStats_(req) {
       if (i === -1) { const n = norm(name); i = headers.findIndex(function (h) { return norm(h) === n; }); }
       return i;
     };
-    const readCol = function (i) { return sheet.getRange(2, i + 1, lastRow - 1, 1).getDisplayValues(); };
-    const condCols = [];
+    const condIdx = [];
     conds.forEach(function (c) {
       const i = colOf(c.col);
-      if (i === -1) res.missing.push(c.col);
-      else condCols.push({ vals: readCol(i), test: makeCondTest_(c) });
+      if (i === -1) res.missing.push(c.col); else condIdx.push(i);
     });
     if (res.missing.length) { res.count = null; return; }
-    let gVals = null;
+    const gi = groupBy ? colOf(groupBy) : -1;
+    if (groupBy && gi === -1) res.missing.push(groupBy);
+    const colsData = readColsDisp_(cat, sheet, condIdx.concat(gi >= 0 ? [gi] : []), lastRow, lastCol);
+    const condCols = conds.map(function (c, k) { return { vals: colsData[condIdx[k]], test: makeCondTest_(c) }; });
+    const gVals = gi >= 0 ? colsData[gi] : null;
     const gLabel = {};
-    if (groupBy) {
-      const gi = colOf(groupBy);
-      if (gi === -1) res.missing.push(groupBy); else gVals = readCol(gi);
-    }
     for (let r = 0; r < lastRow - 1; r++) {
       let ok = true;
       for (let k = 0; k < condCols.length && ok; k++) {
-        ok = condCols[k].test(normQ_(condCols[k].vals[r][0]));
+        ok = condCols[k].test(normQ_(condCols[k].vals[r]));
       }
       if (!ok) continue;
       res.count++;
       if (gVals) {
         // Gabung nilai yang sama walaupun beza huruf besar/kecil atau ruang
-        const nk = normQ_(gVals[r][0]);
-        if (!gLabel[nk]) gLabel[nk] = labelQ_(gVals[r][0]) || '(Kosong)';
+        const nk = normQ_(gVals[r]);
+        if (!gLabel[nk]) gLabel[nk] = labelQ_(gVals[r]) || '(Kosong)';
         const gk = gLabel[nk];
         res.groups[gk] = (res.groups[gk] || 0) + 1;
       }
     }
   });
   const out = { status: 'success', results: results, builtAt: new Date().toISOString() };
-  try { const s = JSON.stringify(out); if (s.length < 95000) cache.put(ck, s, 21600); } catch (e) {}
+  try { const s = JSON.stringify(out); if (s.length < 95000) cache.put(ck, s, COL_TTL); } catch (e) {}
   return out;
 }
 
@@ -886,7 +948,8 @@ function handleDistinctValues_(req) {
   const limit = Math.max(50, Math.min(Number(req.limit) || 3000, 5000));
 
   const cache = CacheService.getScriptCache();
-  const ck = 'D' + getDataVersion_() + '|' + Utilities.base64EncodeWebSafe(
+  const shape = cats.map(function (c) { const sh = getTargetSheet_(c); return sh.getLastRow() + 'x' + sh.getLastColumn(); }).join(',');
+  const ck = 'D2|' + getDataVersion_() + '|' + shape + '|' + Utilities.base64EncodeWebSafe(
     Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, JSON.stringify([cats, col, conds, search, limit])));
   const hit = cache.get(ck);
   if (hit && !req.refresh) { try { return JSON.parse(hit); } catch (e) {} }
@@ -902,24 +965,20 @@ function handleDistinctValues_(req) {
     const vi = colOfQ_(headers, col);
     if (vi === -1) { missingIn.push(cat); return; }
     const n = lastRow - 1;
-    const readDisp = function (i) { return sheet.getRange(2, i + 1, n, 1).getDisplayValues(); };
-    const condCols = [];
-    let lacks = false;
-    conds.forEach(function (c) {
-      const i = colOfQ_(headers, c.col);
-      if (i === -1) lacks = true; else condCols.push({ vals: readDisp(i), test: makeCondTest_(c) });
-    });
-    if (lacks) return; // data ini tiada kolum syarat lain -> tiada rekod sepadan
-    const vals = readDisp(vi);
+    const condIdx = conds.map(function (c) { return colOfQ_(headers, c.col); });
+    if (condIdx.indexOf(-1) !== -1) return; // data ini tiada kolum syarat lain -> tiada rekod sepadan
+    const colsData = readColsDisp_(cat, sheet, condIdx.concat([vi]), lastRow, lastCol);
+    const condCols = conds.map(function (c, k) { return { vals: colsData[condIdx[k]], test: makeCondTest_(c) }; });
+    const vals = colsData[vi];
     for (let r = 0; r < n; r++) {
       let ok = true;
-      for (let k = 0; k < condCols.length && ok; k++) ok = condCols[k].test(normQ_(condCols[k].vals[r][0]));
+      for (let k = 0; k < condCols.length && ok; k++) ok = condCols[k].test(normQ_(condCols[k].vals[r]));
       if (!ok) continue;
-      const key = normQ_(vals[r][0]);
+      const key = normQ_(vals[r]);
       if (search && key.indexOf(search) === -1) continue;
       matchedRows++;
       if (map[key]) map[key].n++;
-      else map[key] = { v: labelQ_(vals[r][0]), n: 1 };
+      else map[key] = { v: labelQ_(vals[r]), n: 1 };
     }
   });
 
@@ -929,7 +988,7 @@ function handleDistinctValues_(req) {
   if (truncated) list.sort(function (a, b) { return b[1] - a[1]; }), list = list.slice(0, limit);
 
   const out = { status: 'success', col: col, values: list, distinct: distinct, rows: matchedRows, truncated: truncated, missingIn: missingIn };
-  try { const s = JSON.stringify(out); if (s.length < 95000) cache.put(ck, s, 21600); } catch (e) {}
+  try { const s = JSON.stringify(out); if (s.length < 95000) cache.put(ck, s, COL_TTL); } catch (e) {}
   return out;
 }
 
@@ -968,34 +1027,22 @@ function handleQueryRows_(req) {
     .filter(function (i, k, arr) { return i !== -1 && arr.indexOf(i) === k; }).slice(0, 60);
   if (!cols.length) cols = headers.map(function (h, i) { return h ? i : -1; }).filter(function (i) { return i !== -1; });
 
-  // Baca keseluruhan data sekali jika banyak kolum, jika tidak baca kolum demi kolum
   const missing = [];
   const condIdx = conds.map(function (c) { const i = colOf(c.col); if (i === -1) missing.push(c.col); return i; });
   if (missing.length) return { status: 'error', message: 'Kolum tiada dalam data ' + cat + ': ' + missing.join(', ') };
   const sortIdx = req.sortCol ? colOf(String(req.sortCol)) : -1;
 
-  const needed = {};
-  cols.concat(condIdx).concat(sortIdx >= 0 ? [sortIdx] : []).forEach(function (i) { needed[i] = true; });
-  const neededList = Object.keys(needed).map(Number);
-  const useFull = neededList.length > 15;
-  let fullVals = null, fullDisp = null;
-  const rawCache = {}, dispCache = {};
-  if (useFull) {
-    const rg = sheet.getRange(2, 1, nRows, lastCol);
-    fullDisp = rg.getDisplayValues();
+  // Keputusan penuh dicache 15 minit: tekan "Papar Senarai" kali kedua = serta-merta
+  const rk = 'R2|' + getDataVersion_() + '|' + cat + '|' + lastRow + 'x' + lastCol + '|' + Utilities.base64EncodeWebSafe(
+    Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, JSON.stringify([conds, cols, limit, sortIdx, req.sortAsc !== false])));
+  if (!req.refresh) {
+    const hit = scGetMany_([rk])[rk];
+    if (hit && hit.status === 'success') { hit.cached = true; return hit; }
   }
-  const raw = function (i) {
-    if (useFull) return null;
-    if (!rawCache[i]) rawCache[i] = sheet.getRange(2, i + 1, nRows, 1).getValues();
-    return rawCache[i];
-  };
-  const disp = function (i) {
-    if (useFull) return null;
-    if (!dispCache[i]) dispCache[i] = sheet.getRange(2, i + 1, nRows, 1).getDisplayValues();
-    return dispCache[i];
-  };
-  const rawAt = function (r, i) { return useFull ? fullVals[r][i] : raw(i)[r][0]; };
-  const dispAt = function (r, i) { return useFull ? fullDisp[r][i] : disp(i)[r][0]; };
+
+  // Baca kolum syarat dahulu, kemudian kolum paparan (dari cache jika ada)
+  const colsData = readColsDisp_(cat, sheet, condIdx.concat(cols).concat(sortIdx >= 0 ? [sortIdx] : []), lastRow, lastCol);
+  const dispAt = function (r, i) { return colsData[i][r]; };
 
   const condObjs = conds.map(function (c, k) { return { i: condIdx[k], test: makeCondTest_(c) }; });
   const matched = [];
@@ -1021,7 +1068,7 @@ function handleQueryRows_(req) {
 
   const take = matched.slice(0, limit);
   const rows = take.map(function (r) { return cols.map(function (i) { return dispAt(r, i); }); });
-  return {
+  const out = {
     status: 'success',
     category: cat,
     headers: cols.map(function (i) { return headers[i]; }),
@@ -1031,4 +1078,10 @@ function handleQueryRows_(req) {
     truncated: matched.length > take.length,
     builtAt: new Date().toISOString()
   };
+  try {
+    const tmp = {};
+    scAddEntries_(rk, out, tmp);
+    if (Number(tmp[rk + '#n']) <= 30) scPutMany_(tmp, COL_TTL);
+  } catch (e) {}
+  return out;
 }

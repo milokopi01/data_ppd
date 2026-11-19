@@ -2,7 +2,7 @@
 <html lang="ms">
 <head>
   <meta charset="UTF-8" />
-  <script>window.GAS_URL = 'https://script.google.com/macros/s/AKfycbyBBCkMAG7WeNmflCq06HSI_EhIpLgPD0v9K2sBEbN9CHIDe8MURhuY6FTgvcqlaMupzA/exec'; /* URL Web App Google Apps Script (KEKAL untuk semua pengguna) */</script>
+  <script>window.GAS_URL = 'https://script.google.com/macros/s/AKfycbxQ-iDz0432i1j4DZ6sBADjJcg0ca-z3-nO34aMsgEpG6Deio5gqZ0o4xbY5LU3mRrhvw/exec'; /* URL Web App Google Apps Script (KEKAL untuk semua pengguna) */</script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#ffffff" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -2070,7 +2070,10 @@
 
     // Seperti Excel: nombor/tarikh dahulu, kemudian teks; sel kosong sentiasa di bawah
     function excelCompare(a, b, asc = true) {
-      const pa = parseSortable(a), pb = parseSortable(b);
+      return compareParsed(parseSortable(a), parseSortable(b), asc);
+    }
+    // Banding nilai yang telah diurai (lebih pantas untuk senarai besar)
+    function compareParsed(pa, pb, asc = true) {
       if (pa.t === 3 || pb.t === 3) return pa.t === pb.t ? 0 : (pa.t === 3 ? 1 : -1);
       const ra = pa.t === 2 ? 1 : 0, rb = pb.t === 2 ? 1 : 0;
       let r;
@@ -2542,33 +2545,180 @@
         return saved.length ? saved : defaultListCols(cat);
       }
 
-      async function loadList(cat) {
+      // Simpanan senarai dalam pelayar: permintaan sama tidak dihantar dua kali,
+      // dan senarai mula diambil di belakang tabir sebaik sahaja jumlah dikira.
+      const rowsCache = new Map(); // kunci -> { p: Promise, t: masa }
+      const ROWS_TTL = 10 * 60 * 1000;
+      function rowsKey(cat) {
+        return JSON.stringify([state.metadata.dataVer || '', cat, lastRun ? lastRun.conds : [], listColsFor(cat), adv.listLimit]);
+      }
+      function fetchRows(cat, force) {
+        const key = rowsKey(cat);
+        const hit = rowsCache.get(key);
+        if (hit && !force && Date.now() - hit.t < ROWS_TTL) return hit.p;
+        const p = callGAS({ action: 'queryRows', category: cat, conditions: lastRun.conds, columns: listColsFor(cat), limit: adv.listLimit, refresh: !!force });
+        const entry = { p, t: Date.now(), done: false };
+        rowsCache.set(key, entry);
+        p.then(() => { entry.done = true; }, () => { if (rowsCache.get(key) === entry) rowsCache.delete(key); });
+        if (rowsCache.size > 12) rowsCache.delete(rowsCache.keys().next().value);
+        return p;
+      }
+      function prefetchRows(cats) {
+        cats.forEach(cat => { try { fetchRows(cat).catch(() => {}); } catch (e) {} });
+      }
+
+      let loadToken = 0;
+      async function loadList(cat, force) {
         if (!lastRun) return;
         const box = document.getElementById('advList');
         if (!box) return;
-        box.innerHTML = `<div class="adv-list"><div style="color:#64748b;">⏳ Mengambil senarai ${CAT_META[cat].label.replace('Senarai ', '')}... (data besar boleh ambil masa 10–30 saat)</div></div>`;
-        box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        closeFilterMenu();
+        const token = ++loadToken;
+        const entry = rowsCache.get(rowsKey(cat));
+        const ready = !force && entry && entry.done && Date.now() - entry.t < ROWS_TTL;
+        let timer = null;
+        if (!ready) {
+          const label = CAT_META[cat].label.replace('Senarai ', '');
+          const t0 = Date.now();
+          box.innerHTML = `<div class="adv-list"><div style="color:#64748b;display:flex;align-items:center;gap:10px;"><span class="spinner" style="width:18px;height:18px;border-width:3px;"></span><span>Mengambil senarai ${label}... <b data-adv-elapsed>0</b> saat</span></div></div>`;
+          box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          timer = setInterval(() => {
+            const el = box.querySelector('[data-adv-elapsed]');
+            if (el) el.textContent = Math.round((Date.now() - t0) / 1000); else clearInterval(timer);
+          }, 1000);
+        }
         try {
-          const res = await callGAS({ action: 'queryRows', category: cat, conditions: lastRun.conds, columns: listColsFor(cat), limit: adv.listLimit });
-          list = { cat, headers: res.headers || [], rows: res.rows || [], count: res.count || 0, total: res.total || 0, truncated: !!res.truncated, sortIdx: -1, asc: true, page: 1, pageSize: (list && list.pageSize) || 100 };
+          const res = await fetchRows(cat, force);
+          if (token !== loadToken) return; // pengguna sudah tekan butang lain
+          list = { cat, headers: res.headers || [], rows: res.rows || [], count: res.count || 0, total: res.total || 0, truncated: !!res.truncated, sortIdx: -1, asc: true, filters: {}, page: 1, pageSize: (list && list.pageSize) || 100 };
           renderList();
+          if (ready) box.scrollIntoView({ behavior: 'smooth', block: 'start' });
         } catch (err) {
+          if (token !== loadToken) return;
           const msg = err.message || String(err);
           const hint = /Tindakan tidak dikenali/i.test(msg) ? '<br><small>Sila kemas kini code.gs dan buat <b>Deploy → Manage deployments → Edit → New version</b>.</small>' : '';
-          box.innerHTML = `<div class="adv-list" style="color:#dc2626;">Gagal ambil senarai: ${escapeHtml(msg)}${hint}</div>`;
+          box.innerHTML = `<div class="adv-list" style="color:#dc2626;">Gagal ambil senarai: ${escapeHtml(msg)}${hint} <button type="button" class="btn-3d btn-white btn-sm" data-adv-retry style="margin-left:8px;">↻ Cuba Lagi</button></div>`;
+          const rb = box.querySelector('[data-adv-retry]');
+          if (rb) rb.addEventListener('click', () => loadList(cat, true));
+        } finally {
+          if (timer) clearInterval(timer);
         }
       }
 
+      // Tapisan gaya Excel bagi senarai (kecuali satu kolum - untuk senarai nilai menu)
+      function listFilteredRows(exceptIdx) {
+        if (!list) return [];
+        const f = list.filters || {};
+        const active = Object.keys(f).map(Number).filter(i => i !== exceptIdx && i < list.headers.length).map(i => ({ i, set: f[i] }));
+        if (!active.length) return list.rows;
+        return list.rows.filter(r => active.every(a => a.set.has(String(r[a.i] ?? '').trim())));
+      }
+      function listFilterCount() { return list ? Object.keys(list.filters || {}).length : 0; }
+
+      // Susun gaya Excel: nombor & tarikh dikenal pasti, sel kosong sentiasa di bawah
+      let filterSetSeq = 0;
       function sortedRows() {
         if (!list) return [];
-        if (list.sortIdx < 0) return list.rows;
-        const i = list.sortIdx, dir = list.asc ? 1 : -1;
-        return list.rows.slice().sort((a, b) => {
-          const x = String(a[i] ?? '').trim(), y = String(b[i] ?? '').trim();
-          if (!x && y) return 1;
-          if (x && !y) return -1;
-          return collator.compare(x, y) * dir;
+        const f = list.filters || {};
+        const sig = list.sortIdx + '|' + list.asc + '|' + Object.keys(f).map(k => k + ':' + (f[k]._id || (f[k]._id = ++filterSetSeq))).join(',');
+        if (list._view && list._viewSig === sig) return list._view; // tukar halaman tidak perlu susun semula
+        const rows = listFilteredRows(-1);
+        let view = rows;
+        if (list.sortIdx >= 0) {
+          const i = list.sortIdx, asc = list.asc;
+          view = rows.map(r => ({ r, k: parseSortable(r[i]) }))
+            .sort((a, b) => compareParsed(a.k, b.k, asc))
+            .map(x => x.r);
+        }
+        list._view = view; list._viewSig = sig;
+        return view;
+      }
+
+      function openAdvFilterMenu(i, anchorEl) {
+        if (!list) return;
+        const key = list.headers[i];
+        const counts = new Map();
+        listFilteredRows(i).forEach(r => {
+          const v = String(r[i] ?? '').trim();
+          counts.set(v, (counts.get(v) || 0) + 1);
         });
+        const values = [...counts.keys()].sort((a, b) => excelCompare(a, b, true));
+        const current = list.filters[i];
+        const isSorted = list.sortIdx === i;
+
+        filterMenu.dataset.cat = 'ADV';
+        filterMenu.dataset.key = String(i);
+        filterMenu.innerHTML = `
+          <div class="fm-title" title="${escapeHtml(key)}">${escapeHtml(key)}</div>
+          <button type="button" class="fm-item ${isSorted && list.asc ? 'active' : ''}" data-fm-sort="asc">↑ Susun A → Z / Kecil → Besar</button>
+          <button type="button" class="fm-item ${isSorted && !list.asc ? 'active' : ''}" data-fm-sort="desc">↓ Susun Z → A / Besar → Kecil</button>
+          ${isSorted ? '<button type="button" class="fm-item" data-fm-sort="none">✕ Buang Susunan</button>' : ''}
+          <div class="fm-sep"></div>
+          ${current ? '<button type="button" class="fm-item" data-fm-clear="1">⧩ Kosongkan Tapisan Kolum Ini</button>' : ''}
+          <input type="text" class="fm-search" placeholder="Cari nilai..." />
+          <div class="fm-list">
+            <label class="fm-check"><input type="checkbox" data-fm-all="1" /> <span class="v"><strong>(Pilih Semua)</strong></span></label>
+            ${values.map((v, k) => `
+              <label class="fm-check" data-fm-row="${escapeHtml(v.toUpperCase())}">
+                <input type="checkbox" data-fm-val="${k}" ${!current || current.has(v) ? 'checked' : ''} />
+                <span class="v" title="${escapeHtml(v)}">${v === '' ? '<em>(Kosong)</em>' : escapeHtml(v)}</span>
+                <span class="c">${fmtN(counts.get(v))}</span>
+              </label>`).join('')}
+          </div>
+          <div class="fm-actions">
+            <button type="button" class="btn-3d btn-white btn-sm" data-fm-cancel="1">Batal</button>
+            <button type="button" class="btn-3d btn-primary btn-sm" data-fm-ok="1">OK</button>
+          </div>
+        `;
+
+        const valBoxes = () => [...filterMenu.querySelectorAll('[data-fm-val]')];
+        const allBox = filterMenu.querySelector('[data-fm-all]');
+        const syncAll = () => {
+          const vis = valBoxes().filter(cb => cb.closest('.fm-check').style.display !== 'none');
+          const n = vis.filter(cb => cb.checked).length;
+          allBox.checked = vis.length > 0 && n === vis.length;
+          allBox.indeterminate = n > 0 && n < vis.length;
+        };
+        syncAll();
+        allBox.addEventListener('change', () => {
+          valBoxes().forEach(cb => { if (cb.closest('.fm-check').style.display !== 'none') cb.checked = allBox.checked; });
+          syncAll();
+        });
+        valBoxes().forEach(cb => cb.addEventListener('change', syncAll));
+        filterMenu.querySelector('.fm-search').addEventListener('input', (e) => {
+          const q = e.target.value.trim().toUpperCase();
+          filterMenu.querySelectorAll('[data-fm-row]').forEach(row => { row.style.display = row.dataset.fmRow.includes(q) ? 'flex' : 'none'; });
+          if (q) valBoxes().forEach(cb => { cb.checked = cb.closest('.fm-check').style.display !== 'none'; });
+          syncAll();
+        });
+        filterMenu.querySelectorAll('[data-fm-sort]').forEach(b => b.addEventListener('click', () => {
+          const dir = b.dataset.fmSort;
+          if (dir === 'none') { list.sortIdx = -1; list.asc = true; }
+          else { list.sortIdx = i; list.asc = dir === 'asc'; }
+          list.page = 1; closeFilterMenu(); renderList();
+        }));
+        const clearBtn = filterMenu.querySelector('[data-fm-clear]');
+        if (clearBtn) clearBtn.addEventListener('click', () => { delete list.filters[i]; list.page = 1; closeFilterMenu(); renderList(); });
+        filterMenu.querySelector('[data-fm-cancel]').addEventListener('click', closeFilterMenu);
+        filterMenu.querySelector('[data-fm-ok]').addEventListener('click', () => {
+          const chosen = valBoxes().filter(cb => cb.checked).map(cb => values[Number(cb.dataset.fmVal)]);
+          if (!chosen.length) { showToast('Sila pilih sekurang-kurangnya satu nilai.', true); return; }
+          if (chosen.length === values.length) delete list.filters[i];
+          else list.filters[i] = new Set(chosen);
+          list.page = 1; closeFilterMenu(); renderList();
+        });
+
+        filterMenu.classList.add('open');
+        const rect = anchorEl.getBoundingClientRect();
+        const mw = filterMenu.offsetWidth, mh = filterMenu.offsetHeight;
+        let left = Math.max(8, Math.min(rect.right - mw, window.innerWidth - mw - 8));
+        let top = rect.bottom + 6;
+        if (top + mh > window.innerHeight - 8) top = Math.max(8, rect.top - mh - 6);
+        filterMenu.style.left = left + 'px';
+        filterMenu.style.top = top + 'px';
+        const se = filterMenu.querySelector('.fm-search');
+        if (se && window.matchMedia('(hover: hover) and (pointer: fine)').matches) se.focus({ preventScroll: true });
+        filterMenu._openedAt = Date.now(); filterMenu._w = window.innerWidth;
       }
 
       function renderList() {
@@ -2588,9 +2738,10 @@
             <div class="adv-list-head">
               <div>
                 <div class="adv-list-title">${meta.label} — ${fmtN(list.count)} rekod</div>
-                <div class="adv-list-sub">Syarat: ${escapeHtml(lastRun ? lastRun.desc : '')}${list.sortIdx >= 0 ? ` • Disusun ikut ${escapeHtml(list.headers[list.sortIdx])} (${list.asc ? 'A→Z' : 'Z→A'})` : ' • Klik tajuk kolum untuk susun'}</div>
+                <div class="adv-list-sub">Syarat: ${escapeHtml(lastRun ? lastRun.desc : '')}${list.sortIdx >= 0 ? ` • Disusun ikut ${escapeHtml(list.headers[list.sortIdx])} (${list.asc ? 'A→Z' : 'Z→A'})` : ' • Klik tajuk kolum untuk susun, atau ▾ untuk susun & tapis'}${listFilterCount() ? ` • ${listFilterCount()} tapisan kolum aktif` : ''}</div>
               </div>
               <div class="adv-list-tools">
+                ${(listFilterCount() || list.sortIdx >= 0) ? `<button type="button" class="btn-3d btn-white btn-sm" data-adv-clear>✕ Kosongkan Susun/Tapis${listFilterCount() ? ` (${listFilterCount()})` : ''}</button>` : ''}
                 <details class="adv-cols">
                   <summary class="btn-3d btn-white btn-sm">⚙️ Kolum (${list.headers.length})</summary>
                   <div class="adv-cols-panel">
@@ -2614,12 +2765,22 @@
               </div>
             </div>
             ${list.truncated ? `<div class="adv-warn">⚠️ Hanya <b>${fmtN(list.rows.length)}</b> daripada <b>${fmtN(list.count)}</b> rekod diambil. Tambah syarat carian atau naikkan had rekod untuk lihat semua.</div>` : ''}
-            ${!rows.length ? '<div class="empty-state" style="padding:22px;">Tiada rekod.</div>' : `
+            ${!rows.length ? (listFilterCount() ? '<div class="empty-state" style="padding:22px;">Tiada rekod sepadan dengan tapisan semasa. <button type="button" class="btn-3d btn-white btn-sm" data-adv-clear style="margin-left:8px;">✕ Kosongkan Tapisan</button></div>' : '<div class="empty-state" style="padding:22px;">Tiada rekod.</div>') : `
             <div class="table-wrapper" style="max-height:640px;overflow:auto;">
               <table class="data-table">
                 <thead><tr>
                   <th style="width:52px;">Bil</th>
-                  ${list.headers.map((h, i) => `<th data-adv-sort="${i}" title="Klik untuk susun">${escapeHtml(h)} <span class="th-sort-ind">${list.sortIdx === i ? (list.asc ? '▲' : '▼') : ''}</span></th>`).join('')}
+                  ${list.headers.map((h, i) => {
+                    const isSorted = list.sortIdx === i;
+                    const isFiltered = !!list.filters[i];
+                    return `<th class="th-excel ${isSorted ? 'is-sorted' : ''} ${isFiltered ? 'is-filtered' : ''}">
+                      <div class="th-inner">
+                        <span class="th-label" data-adv-sort="${i}" title="Klik untuk susun">${escapeHtml(h)}</span>
+                        <span class="th-sort-ind">${isSorted ? (list.asc ? '▲' : '▼') : ''}</span>
+                        <button type="button" class="th-filter-btn" data-adv-filter="${i}" title="Susun & Tapis (gaya Excel)">${isFiltered ? '⧩' : '▾'}</button>
+                      </div>
+                    </th>`;
+                  }).join('')}
                 </tr></thead>
                 <tbody>
                   ${pageRows.map((r, k) => `<tr><td style="font-weight:700;color:var(--text-muted);">${start + k + 1}</td>${list.headers.map((_, i) => `<td>${escapeHtml(r[i] === '' || r[i] == null ? '-' : r[i])}</td>`).join('')}</tr>`).join('')}
@@ -2627,7 +2788,7 @@
               </table>
             </div>
             <div class="pagination-bar">
-              <span>Memaparkan <strong>${fmtN(start + 1)}–${fmtN(start + pageRows.length)}</strong> daripada <strong>${fmtN(rows.length)}</strong> rekod • ${list.headers.length} kolum</span>
+              <span>Memaparkan <strong>${fmtN(start + 1)}–${fmtN(start + pageRows.length)}</strong> daripada <strong>${fmtN(rows.length)}</strong> rekod${rows.length !== list.rows.length ? ` (ditapis daripada ${fmtN(list.rows.length)})` : ''} • ${list.headers.length} kolum</span>
               <div style="display:flex;gap:6px;align-items:center;">
                 <select class="select-3d" data-adv-pagesize style="width:auto;padding:6px 10px;font-size:.8rem;">
                   ${[50, 100, 500, 1000, 0].map(n => `<option value="${n}" ${list.pageSize === n ? 'selected' : ''}>${n ? n + ' / halaman' : 'Semua'}</option>`).join('')}
@@ -2646,10 +2807,19 @@
           else { list.sortIdx = i; list.asc = true; }
           list.page = 1; renderList();
         }));
+        box.querySelectorAll('[data-adv-filter]').forEach(btn => btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const i = +btn.dataset.advFilter;
+          if (filterMenu.classList.contains('open') && filterMenu.dataset.cat === 'ADV' && filterMenu.dataset.key === String(i)) closeFilterMenu();
+          else openAdvFilterMenu(i, btn);
+        }));
+        box.querySelectorAll('[data-adv-clear]').forEach(b => b.addEventListener('click', () => {
+          list.filters = {}; list.sortIdx = -1; list.asc = true; list.page = 1; renderList();
+        }));
         q('[data-adv-pagesize]') && q('[data-adv-pagesize]').addEventListener('change', e => { list.pageSize = +e.target.value; list.page = 1; renderList(); });
         q('[data-adv-prev]') && q('[data-adv-prev]').addEventListener('click', () => { list.page--; renderList(); });
         q('[data-adv-next]') && q('[data-adv-next]').addEventListener('click', () => { list.page++; renderList(); });
-        q('[data-adv-close]').addEventListener('click', () => { list = null; box.innerHTML = ''; });
+        q('[data-adv-close]').addEventListener('click', () => { closeFilterMenu(); list = null; box.innerHTML = ''; });
         q('[data-adv-limit]').addEventListener('change', e => { adv.listLimit = +e.target.value; save(); loadList(list.cat); });
         q('[data-adv-print]').addEventListener('click', printList);
         q('[data-adv-xlsx]').addEventListener('click', exportListXlsx);
@@ -2691,7 +2861,7 @@
             tr { break-inside: avoid; }
           </style></head><body>
           <h1>${escapeHtml(listTitle())}</h1>
-          <div class="sub">Syarat: ${escapeHtml(lastRun ? lastRun.desc : '')} • ${fmtN(list.rows.length)}${list.truncated ? ' daripada ' + fmtN(list.count) : ''} rekod • Dicetak: ${new Date().toLocaleString('ms-MY')}</div>
+          <div class="sub">Syarat: ${escapeHtml(lastRun ? lastRun.desc : '')} • ${fmtN(aoa.length - 1)}${(list.truncated || aoa.length - 1 !== list.rows.length) ? ' daripada ' + fmtN(list.truncated ? list.count : list.rows.length) : ''} rekod • Dicetak: ${new Date().toLocaleString('ms-MY')}</div>
           <table><thead><tr>${aoa[0].map(h => `<th>${escapeHtml(h)}</th>`).join('')}</tr></thead>
           <tbody>${aoa.slice(1).map(r => `<tr>${r.map(v => `<td>${escapeHtml(v)}</td>`).join('')}</tr>`).join('')}</tbody></table>
           <script>window.onload = function () { setTimeout(function () { window.print(); }, 200); };<\/script>
@@ -2710,7 +2880,8 @@
           ['Laporan', listTitle()],
           ['Syarat', lastRun ? lastRun.desc : ''],
           ['Jumlah sepadan', list.count],
-          ['Rekod dalam fail', list.rows.length],
+          ['Rekod dalam fail', sortedRows().length],
+          ['Tapisan kolum', listFilterCount() ? Object.keys(list.filters).map(i => `${list.headers[i]} (${list.filters[i].size} nilai)`).join('; ') : 'Tiada'],
           ['Susunan', list.sortIdx >= 0 ? `${list.headers[list.sortIdx]} (${list.asc ? 'A→Z' : 'Z→A'})` : 'Asal'],
           ['Tarikh', new Date().toLocaleString('ms-MY')]
         ]);
@@ -2731,7 +2902,7 @@
         const fs = nCols > 14 ? 5.5 : nCols > 10 ? 6.5 : 7.5;
         doc.setFontSize(13); doc.text(listTitle(), 10, 12);
         doc.setFontSize(8); doc.setTextColor(71, 85, 105);
-        const sub = `Syarat: ${lastRun ? lastRun.desc : ''}  |  ${fmtN(list.rows.length)}${list.truncated ? ' daripada ' + fmtN(list.count) : ''} rekod  |  ${new Date().toLocaleString('ms-MY')}`;
+        const sub = `Syarat: ${lastRun ? lastRun.desc : ''}  |  ${fmtN(aoa.length - 1)}${(list.truncated || aoa.length - 1 !== list.rows.length) ? ' daripada ' + fmtN(list.truncated ? list.count : list.rows.length) : ''} rekod  |  ${new Date().toLocaleString('ms-MY')}`;
         doc.text(doc.splitTextToSize(sub, 277), 10, 17);
         doc.autoTable({
           head: [aoa[0]],
@@ -2784,6 +2955,8 @@
             }).join('') + '</div><div id="advList"></div>';
           lastRun = { conds: conds.map(c => ({ ...c, values: c.values ? c.values.slice() : undefined })), desc: describeAll(conds) };
           out.querySelectorAll('[data-adv-list]').forEach(b => b.addEventListener('click', () => loadList(b.dataset.advList)));
+          // Mula ambil senarai di belakang tabir supaya "Papar Senarai" keluar serta-merta
+          prefetchRows(adv.cats.filter(cat => res.results[cat] && res.results[cat].count > 0 && res.results[cat].count <= 60000));
         } catch (err) {
           out.innerHTML = `<div style="color:#dc2626;">Gagal: ${escapeHtml(err.message || String(err))}</div>`;
         } finally { btn.disabled = false; }
