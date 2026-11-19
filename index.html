@@ -2,7 +2,7 @@
 <html lang="ms">
 <head>
   <meta charset="UTF-8" />
-  <script>window.GAS_URL = 'https://script.google.com/macros/s/AKfycbz8FIpesYq4Kx23KkZZE4mUJ5Sr1pqx3uVQCuX3CHvyCEEzMTDat-hWx3ZNasmtrFw5TQ/exec'; /* URL Web App Google Apps Script (KEKAL untuk semua pengguna) */</script>
+  <script>window.GAS_URL = 'https://script.google.com/macros/s/AKfycbxQ-iDz0432i1j4DZ6sBADjJcg0ca-z3-nO34aMsgEpG6Deio5gqZ0o4xbY5LU3mRrhvw/exec'; /* URL Web App Google Apps Script (KEKAL untuk semua pengguna) */</script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#ffffff" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -377,6 +377,25 @@
     .adv-sel { width: auto; min-width: 160px; flex: 1 1 160px; }
     .adv-cond { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
     .adv-cond .input-3d { flex: 2 1 160px; width: auto; }
+    .adv-pick {
+      display: flex; align-items: center; gap: 8px; text-align: left; cursor: pointer;
+      font: inherit; font-size: 0.94rem; font-weight: 600; white-space: nowrap; overflow: hidden;
+    }
+    .adv-pick .t { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+    .adv-pick .k { font-size: 0.7rem; color: #64748b; }
+    .adv-pick:hover { border-color: var(--primary); }
+    .adv-pick.is-active { border-color: var(--primary); background: var(--primary-soft); color: var(--primary); }
+    .adv-mode-btn { flex: 0 1 170px; min-width: 150px; }
+    .adv-vals-btn { flex: 2 1 160px; width: auto; font-weight: 500; }
+    .adv-vals-btn .t em { color: #64748b; font-style: normal; }
+    .adv-menu { width: 340px; max-width: calc(100vw - 16px); }
+    .adv-menu .fm-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; }
+    .adv-menu .fm-item { font-size: 0.8rem; padding: 6px 8px; }
+    .adv-menu .fm-item.active { background: var(--primary-soft); }
+    .adv-menu .fm-list { max-height: 260px; }
+    .fm-note { font-size: 0.74rem; color: #64748b; padding: 2px 4px 6px; line-height: 1.35; }
+    .fm-note.warn { color: #92400e; }
+    .fm-load { padding: 14px 8px; color: #64748b; text-align: center; }
     .adv-res-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
     .adv-res-card { border: 1px solid var(--border, #e2e8f0); border-radius: 12px; padding: 14px; }
     .adv-res-num { font-size: 1.8rem; font-weight: 800; }
@@ -2222,7 +2241,7 @@
      * ======================================================================== */
     (function () {
       const LS = 'ds_adv_v1';
-      let adv = { cats: ['MURID'], conds: [{ col: '', mode: 'contains', value: '' }], groupBy: '', open: false };
+      let adv = { cats: ['MURID'], conds: [{ col: '', mode: 'in', value: '', values: [] }], groupBy: '', open: false };
       try { adv = Object.assign(adv, JSON.parse(localStorage.getItem(LS) || '{}')); } catch (e) {}
       const save = () => { try { localStorage.setItem(LS, JSON.stringify(adv)); } catch (e) {} };
       const det = document.getElementById('advDetails');
@@ -2238,24 +2257,260 @@
         return (blank ? `<option value="">${blank}</option>` : '') +
           cols.map(c => `<option value="${escapeHtml(c)}" ${c === sel ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('');
       }
+      /* ---------- Syarat: label, ringkasan & keterangan ---------- */
+      const normV = v => String(v == null ? '' : v).replace(/[\u00A0\u2007\u202F\u200B\u200C\u200D\uFEFF]/g, ' ').replace(/\s+/g, ' ').trim().toUpperCase();
+      const showV = v => (v === '' ? '(Kosong)' : v);
+      function modeLabel(c) {
+        if (c.mode === 'in') return (c.values || []).length ? `☑ ${(c.values || []).length} dipilih` : '☑ Pilih nilai';
+        return c.mode === 'equals' ? 'sama dengan' : c.mode === 'notempty' ? 'tidak kosong' : 'mengandungi';
+      }
+      function valsSummary(c) {
+        const v = c.values || [];
+        if (!c.col) return '<em>Pilih kolum dahulu</em>';
+        if (!v.length) return '<em>(Semua) — klik untuk tick nilai</em>';
+        const head = v.slice(0, 3).map(x => escapeHtml(showV(x))).join(', ');
+        return head + (v.length > 3 ? ` <em>+${v.length - 3} lagi</em>` : '');
+      }
+      function isValidCond(c) {
+        if (!c || !c.col) return false;
+        if (c.mode === 'in') return (c.values || []).length > 0;
+        if (c.mode === 'notempty') return true;
+        return String(c.value || '').trim() !== '';
+      }
+      function validConds(exceptIdx) {
+        return adv.conds
+          .map((c, i) => ({ c, i }))
+          .filter(o => o.i !== exceptIdx && isValidCond(o.c))
+          .map(({ c }) => c.mode === 'in'
+            ? { col: c.col, mode: 'in', values: c.values.slice() }
+            : { col: c.col, mode: c.mode || 'contains', value: String(c.value || '') });
+      }
+      function describeCond(c) {
+        if (c.mode === 'in') {
+          const v = c.values || [];
+          const shown = v.slice(0, 5).map(x => `"${showV(x)}"`).join(' atau ');
+          return `${c.col} = ${shown}${v.length > 5 ? ` (+${v.length - 5} nilai lagi)` : ''}`;
+        }
+        if (c.mode === 'notempty') return `${c.col} tidak kosong`;
+        return `${c.col} ${c.mode === 'equals' ? '=' : 'mengandungi'} "${c.value}"`;
+      }
+      const describeAll = conds => conds.length ? conds.map(describeCond).join(' DAN ') : 'Semua rekod';
+
+      /* ---------- MENU TICK NILAI (gaya tapisan Excel) ---------- */
+      const advMenu = document.createElement('div');
+      advMenu.className = 'filter-menu adv-menu';
+      document.body.appendChild(advMenu);
+      const dvCache = new Map();
+      let menuSeq = 0;
+      function closeAdvMenu() { advMenu.classList.remove('open'); advMenu.dataset.ci = ''; menuSeq++; }
+      function placeAdvMenu(i) {
+        const anchor = document.querySelector(`#advConds .adv-mode-btn[data-cmenu="${i}"]`);
+        if (!anchor) return;
+        const rect = anchor.getBoundingClientRect();
+        const mw = advMenu.offsetWidth, mh = advMenu.offsetHeight;
+        let left = Math.max(8, Math.min(rect.left, window.innerWidth - mw - 8));
+        let top = rect.bottom + 6;
+        if (top + mh > window.innerHeight - 8) top = Math.max(8, Math.min(rect.top - mh - 6, window.innerHeight - mh - 8));
+        advMenu.style.left = left + 'px';
+        advMenu.style.top = top + 'px';
+      }
+      document.addEventListener('click', (e) => {
+        if (!advMenu.classList.contains('open') || !e.target.isConnected) return;
+        if (!advMenu.contains(e.target) && !e.target.closest('[data-cmenu]')) closeAdvMenu();
+      });
+      document.addEventListener('scroll', (e) => {
+        if (advMenu.classList.contains('open') && !advMenu.contains(e.target)) placeAdvMenu(advMenu.dataset.ci);
+      }, true);
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && advMenu.classList.contains('open')) closeAdvMenu(); });
+      window.addEventListener('resize', () => { if (advMenu.classList.contains('open')) placeAdvMenu(advMenu.dataset.ci); });
+
+      async function fetchDistinct(col, others, search) {
+        const key = JSON.stringify([adv.cats, col, others, search]);
+        if (dvCache.has(key)) return dvCache.get(key);
+        const p = callGAS({ action: 'distinctValues', categories: adv.cats, col, conditions: others, search, limit: 3000 })
+          .catch(err => { dvCache.delete(key); throw err; });
+        dvCache.set(key, p);
+        return p;
+      }
+
+      function openCondMenu(i) {
+        const c = adv.conds[i];
+        if (!c) return;
+        const seq = ++menuSeq;
+        advMenu.dataset.ci = String(i);
+        const modes = [['in', '☑ Pilih & tick nilai'], ['contains', 'Mengandungi teks'], ['equals', 'Sama dengan teks'], ['notempty', 'Tidak kosong']];
+        advMenu.innerHTML = `
+          <div class="fm-title" title="${escapeHtml(c.col || '')}">${escapeHtml(c.col || 'Syarat')}</div>
+          <div class="fm-modes">${modes.map(([m, l]) => `<button type="button" class="fm-item ${c.mode === m ? 'active' : ''}" data-am="${m}">${l}</button>`).join('')}</div>
+          <div class="fm-sep"></div>
+          <div data-am-body></div>`;
+        advMenu.querySelectorAll('[data-am]').forEach(b => b.addEventListener('click', () => {
+          const m = b.dataset.am;
+          if (m === 'in') {
+            if (c.mode !== 'in') { c.mode = 'in'; c.values = []; save(); renderAdv(); }
+            openCondMenu(i);
+            return;
+          }
+          c.mode = m; save(); renderAdv(); closeAdvMenu();
+          const inp = document.querySelector(`#advConds input[data-ci="${i}"][data-f="value"]`);
+          if (inp && !inp.disabled) inp.focus();
+        }));
+        const body = advMenu.querySelector('[data-am-body]');
+        advMenu.classList.add('open');
+
+        if (c.mode !== 'in') {
+          body.innerHTML = `<div class="fm-note">Mod teks: taip nilai dalam kotak di sebelah. Pilih <b>☑ Pilih & tick nilai</b> untuk senarai nilai sebenar seperti Excel.</div>`;
+          placeAdvMenu(i); return;
+        }
+        if (!c.col) {
+          body.innerHTML = `<div class="fm-note warn">Sila pilih kolum dahulu di kotak sebelah kiri.</div>`;
+          placeAdvMenu(i); return;
+        }
+        if (!adv.cats.length) {
+          body.innerHTML = `<div class="fm-note warn">Sila tick sekurang-kurangnya satu data (Murid / Guru / AKP).</div>`;
+          placeAdvMenu(i); return;
+        }
+
+        const others = validConds(i);
+        const prevSel = new Set((c.values || []).map(normV));
+        const startAll = prevSel.size === 0;
+        let values = [], truncated = false, touched = false, serverSearch = '', searchTimer = null;
+
+        body.innerHTML = `
+          <input type="text" class="fm-search" placeholder="Cari nilai..." />
+          <div class="fm-note" data-am-note></div>
+          <div class="fm-list" data-am-list><div class="fm-load">⏳ Memuatkan nilai sebenar daripada data...</div></div>
+          <div class="fm-actions">
+            <button type="button" class="btn-3d btn-white btn-sm" data-am-cancel>Batal</button>
+            <button type="button" class="btn-3d btn-primary btn-sm" data-am-ok disabled>OK</button>
+          </div>`;
+        const listEl = body.querySelector('[data-am-list]');
+        const noteEl = body.querySelector('[data-am-note]');
+        const searchEl = body.querySelector('.fm-search');
+        const okBtn = body.querySelector('[data-am-ok]');
+        placeAdvMenu(i);
+        if (window.matchMedia('(hover: hover) and (pointer: fine)').matches) searchEl.focus({ preventScroll: true });
+
+        const boxes = () => [...listEl.querySelectorAll('[data-av]')];
+        const visible = cb => cb.closest('.fm-check').style.display !== 'none';
+        function syncAll() {
+          const all = listEl.querySelector('[data-av-all]');
+          if (!all) return;
+          const vis = boxes().filter(visible);
+          const n = vis.filter(cb => cb.checked).length;
+          all.checked = vis.length > 0 && n === vis.length;
+          all.indeterminate = n > 0 && n < vis.length;
+        }
+        function renderValues(checkAll) {
+          if (!values.length) { listEl.innerHTML = `<div class="fm-load">Tiada nilai ditemui.</div>`; return; }
+          listEl.innerHTML = `<label class="fm-check"><input type="checkbox" data-av-all="1" /> <span class="v"><strong>(Pilih Semua)</strong></span></label>` +
+            values.map(([v, n], k) => `
+              <label class="fm-check" data-av-row="${escapeHtml(normV(v))}">
+                <input type="checkbox" data-av="${k}" ${checkAll || prevSel.has(normV(v)) ? 'checked' : ''} />
+                <span class="v" title="${escapeHtml(v)}">${v === '' ? '<em>(Kosong)</em>' : escapeHtml(v)}</span>
+                <span class="c">${Number(n).toLocaleString('ms-MY')}</span>
+              </label>`).join('');
+          listEl.querySelector('[data-av-all]').addEventListener('change', (e) => {
+            touched = true;
+            boxes().forEach(cb => { if (visible(cb)) cb.checked = e.target.checked; });
+            syncAll();
+          });
+          boxes().forEach(cb => cb.addEventListener('change', () => { touched = true; syncAll(); }));
+          syncAll();
+        }
+        function setNote(res) {
+          const parts = [];
+          const total = Number(res.distinct || 0).toLocaleString('ms-MY');
+          if (res.truncated) parts.push(`⚠️ Terlalu banyak nilai (${total}). Dipaparkan ${values.length.toLocaleString('ms-MY')} yang paling kerap — <b>taip dalam kotak cari</b> untuk cari nilai lain.`);
+          else parts.push(`${total} nilai unik${others.length ? ' (mengikut syarat lain)' : ''}. Nombor di kanan = bilangan rekod.`);
+          if ((res.missingIn || []).length) parts.push(`Kolum ini tiada dalam data: ${res.missingIn.map(x => CAT_META[x] ? CAT_META[x].label.replace('Senarai ', '') : x).join(', ')}.`);
+          noteEl.className = 'fm-note' + (res.truncated || (res.missingIn || []).length ? ' warn' : '');
+          noteEl.innerHTML = parts.join('<br>');
+        }
+        const sortVals = arr => arr.slice().sort((a, b) => {
+          if (a[0] === '' && b[0] !== '') return 1;
+          if (b[0] === '' && a[0] !== '') return -1;
+          return collator.compare(a[0], b[0]);
+        });
+        async function load(search, checkAll) {
+          listEl.innerHTML = `<div class="fm-load">⏳ Memuatkan nilai sebenar daripada data...</div>`;
+          okBtn.disabled = true;
+          try {
+            const res = await fetchDistinct(c.col, others, search);
+            if (seq !== menuSeq) return;
+            values = sortVals(res.values || []);
+            if (!search) truncated = !!res.truncated;
+            serverSearch = search;
+            setNote(res);
+            renderValues(checkAll);
+            okBtn.disabled = false;
+          } catch (err) {
+            if (seq !== menuSeq) return;
+            const msg = err.message || String(err);
+            const hint = /Tindakan tidak dikenali/i.test(msg) ? '<br><small>Sila kemas kini code.gs dan buat <b>Deploy → Manage deployments → Edit → New version</b>.</small>' : '';
+            listEl.innerHTML = `<div class="fm-load" style="color:#dc2626;">Gagal ambil nilai: ${escapeHtml(msg)}${hint}</div>`;
+          }
+          placeAdvMenu(i);
+        }
+        load('', startAll);
+
+        searchEl.addEventListener('input', () => {
+          touched = true;
+          const q = normV(searchEl.value);
+          if (truncated) {
+            clearTimeout(searchTimer);
+            searchTimer = setTimeout(() => { if (seq === menuSeq) load(q, true); }, 450);
+            return;
+          }
+          // Seperti Excel: bila mencari, hanya nilai yang sepadan dipilih
+          boxes().forEach(cb => {
+            const row = cb.closest('.fm-check');
+            const show = row.dataset.avRow.includes(q);
+            row.style.display = show ? 'flex' : 'none';
+            if (q) cb.checked = show;
+          });
+          syncAll();
+        });
+
+        body.querySelector('[data-am-cancel]').addEventListener('click', closeAdvMenu);
+        okBtn.addEventListener('click', () => {
+          if (!touched) { closeAdvMenu(); return; }
+          const q = normV(searchEl.value);
+          const chosen = boxes().filter(cb => cb.checked && visible(cb)).map(cb => values[Number(cb.dataset.av)][0]);
+          if (!chosen.length) { showToast('Sila tick sekurang-kurangnya satu nilai.', true); return; }
+          const allPicked = !truncated && !q && !serverSearch && chosen.length === values.length;
+          c.mode = 'in';
+          c.values = allPicked ? [] : chosen;
+          save(); closeAdvMenu(); renderAdv();
+        });
+      }
+
       function renderAdv() {
         document.querySelectorAll('[data-adv-cat]').forEach(cb => { cb.checked = adv.cats.includes(cb.dataset.advCat); });
         const cols = allCols();
         document.getElementById('advConds').innerHTML = adv.conds.map((c, i) => `
           <div class="adv-cond">
             <select class="select-3d adv-sel" data-ci="${i}" data-f="col">${opts(cols, c.col, '— Pilih kolum —')}</select>
-            <select class="select-3d adv-sel" style="flex:0 1 150px" data-ci="${i}" data-f="mode">
-              <option value="contains" ${c.mode === 'contains' ? 'selected' : ''}>mengandungi</option>
-              <option value="equals" ${c.mode === 'equals' ? 'selected' : ''}>sama dengan</option>
-              <option value="notempty" ${c.mode === 'notempty' ? 'selected' : ''}>tidak kosong</option>
-            </select>
-            <input class="input-3d" data-ci="${i}" data-f="value" value="${escapeHtml(c.value || '')}" placeholder="Contoh: OKU, PEREMPUAN, KEDAH" ${c.mode === 'notempty' ? 'disabled' : ''}>
+            <button type="button" class="select-3d adv-pick adv-mode-btn ${c.mode === 'in' && (c.values || []).length ? 'is-active' : ''}" data-cmenu="${i}" title="Klik untuk pilih & tick nilai (seperti tapisan Excel)">
+              <span class="t">${escapeHtml(modeLabel(c))}</span><span class="k">▾</span>
+            </button>
+            ${c.mode === 'in'
+              ? `<button type="button" class="input-3d adv-pick adv-vals-btn" data-cmenu="${i}" title="${escapeHtml((c.values || []).join(', '))}"><span class="t">${valsSummary(c)}</span><span class="k">✎</span></button>`
+              : `<input class="input-3d" data-ci="${i}" data-f="value" value="${escapeHtml(c.value || '')}" placeholder="Contoh: OKU, PEREMPUAN, KEDAH" ${c.mode === 'notempty' ? 'disabled' : ''}>`}
             <button type="button" class="btn-3d btn-white btn-sm" data-cdel="${i}" title="Buang syarat">✕</button>
           </div>`).join('') || '<div style="color:#64748b;font-size:.9rem;">Tiada syarat — akan kira semua rekod.</div>';
         document.getElementById('advGroup').innerHTML = opts(cols, adv.groupBy, 'Tiada (jumlah sahaja)');
         document.querySelectorAll('#advConds [data-ci]').forEach(el => el.addEventListener('change', () => {
-          adv.conds[+el.dataset.ci][el.dataset.f] = el.value; save();
-          if (el.dataset.f === 'mode') renderAdv();
+          const c = adv.conds[+el.dataset.ci];
+          c[el.dataset.f] = el.value;
+          if (el.dataset.f === 'col') { c.values = []; renderAdv(); }
+          save();
+        }));
+        document.querySelectorAll('#advConds [data-cmenu]').forEach(b => b.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const i = +b.dataset.cmenu;
+          if (advMenu.classList.contains('open') && advMenu.dataset.ci === String(i)) { closeAdvMenu(); return; }
+          openCondMenu(i);
         }));
         document.querySelectorAll('#advConds [data-cdel]').forEach(b => b.addEventListener('click', () => {
           adv.conds.splice(+b.dataset.cdel, 1); save(); renderAdv();
@@ -2496,22 +2751,23 @@
       }
       document.querySelectorAll('[data-adv-cat]').forEach(cb => cb.addEventListener('change', () => {
         adv.cats = [...document.querySelectorAll('[data-adv-cat]:checked')].map(x => x.dataset.advCat);
-        save(); renderAdv();
+        closeAdvMenu(); save(); renderAdv();
       }));
       document.getElementById('advAddCond').addEventListener('click', () => {
-        adv.conds.push({ col: '', mode: 'contains', value: '' }); save(); renderAdv();
+        adv.conds.push({ col: '', mode: 'in', value: '', values: [] }); save(); renderAdv();
       });
       document.getElementById('advGroup').addEventListener('change', e => { adv.groupBy = e.target.value; save(); });
       document.getElementById('advRun').addEventListener('click', async () => {
         if (!adv.cats.length) { showToast('Sila tick sekurang-kurangnya satu data.', true); return; }
-        const conds = adv.conds.filter(c => c.col && (c.mode === 'notempty' || String(c.value || '').trim()));
+        closeAdvMenu();
+        const conds = validConds(-1);
         const out = document.getElementById('advResult');
         const btn = document.getElementById('advRun');
         btn.disabled = true; out.innerHTML = '<div style="color:#64748b;">⏳ Mengira dalam semua data... (kali pertama boleh ambil masa beberapa saat)</div>';
         try {
           const res = await callGAS({ action: 'queryStats', categories: adv.cats, conditions: conds, groupBy: adv.groupBy });
           const fmt = n => Number(n).toLocaleString('ms-MY');
-          const desc = conds.length ? conds.map(c => `${escapeHtml(c.col)} ${c.mode === 'equals' ? '=' : c.mode === 'notempty' ? 'tidak kosong' : 'mengandungi'} ${c.mode === 'notempty' ? '' : '"' + escapeHtml(c.value) + '"'}`).join(' DAN ') : 'Semua rekod';
+          const desc = escapeHtml(describeAll(conds));
           out.innerHTML = `<div style="font-size:.85rem;color:#64748b;margin-bottom:8px;">Syarat: ${desc}</div><div class="adv-res-grid">` +
             adv.cats.map(cat => {
               const r = res.results[cat] || {};
@@ -2526,7 +2782,7 @@
                 ${r.count > 0 ? `<button type="button" class="btn-3d btn-white btn-sm adv-list-btn" data-adv-list="${cat}">📋 Papar Senarai (${fmt(r.count)})</button>` : ''}
               </div>`;
             }).join('') + '</div><div id="advList"></div>';
-          lastRun = { conds: conds.map(c => ({ ...c })), desc: conds.length ? conds.map(c => `${c.col} ${c.mode === 'equals' ? '=' : c.mode === 'notempty' ? 'tidak kosong' : 'mengandungi'}${c.mode === 'notempty' ? '' : ' "' + c.value + '"'}`).join(' DAN ') : 'Semua rekod' };
+          lastRun = { conds: conds.map(c => ({ ...c, values: c.values ? c.values.slice() : undefined })), desc: describeAll(conds) };
           out.querySelectorAll('[data-adv-list]').forEach(b => b.addEventListener('click', () => loadList(b.dataset.advList)));
         } catch (err) {
           out.innerHTML = `<div style="color:#dc2626;">Gagal: ${escapeHtml(err.message || String(err))}</div>`;

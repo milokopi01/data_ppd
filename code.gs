@@ -94,6 +94,10 @@ function doPost(e) {
       return jsonResponse_(handleQueryRows_(req));
     }
 
+    if (action === 'distinctValues') {
+      return jsonResponse_(handleDistinctValues_(req));
+    }
+
     if (action === 'uploadBatch') {
       return jsonResponse_(handleUploadBatch_(req));
     }
@@ -734,18 +738,18 @@ function jsonResponse_(obj) {
  * ============================================================================
  * CARIAN MELUAS / STATISTIK SELURUH NEGARA
  * req.categories: ['MURID','GURU','AKP'] (pilih mana-mana)
- * req.conditions: [{ col, value, mode: 'contains'|'equals'|'notempty' }] (semua mesti padan)
+ * req.conditions: [{ col, value, values, mode: 'in'|'contains'|'equals'|'notempty' }] (semua mesti padan)
  * req.groupBy: nama kolum (pilihan) untuk pecahan, cth. NEGERI
  * ============================================================================
  */
 function handleQueryStats_(req) {
   const cats = (req.categories || []).filter(function (c) { return ['MURID', 'GURU', 'AKP'].indexOf(c) !== -1; });
   if (!cats.length) return { status: 'error', message: 'Sila pilih sekurang-kurangnya satu data.' };
-  const conds = (req.conditions || []).filter(function (c) { return c && c.col; }).slice(0, 6);
+  const conds = cleanConds_(req.conditions);
   const groupBy = String(req.groupBy || '').trim();
 
   const cache = CacheService.getScriptCache();
-  const ck = 'Q' + getDataVersion_() + '|' + Utilities.base64EncodeWebSafe(
+  const ck = 'Q2|' + getDataVersion_() + '|' + Utilities.base64EncodeWebSafe(
     Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, JSON.stringify([cats, conds, groupBy])));
   const hit = cache.get(ck);
   if (hit && !req.refresh) { try { return JSON.parse(hit); } catch (e) {} }
@@ -764,15 +768,16 @@ function handleQueryStats_(req) {
       if (i === -1) { const n = norm(name); i = headers.findIndex(function (h) { return norm(h) === n; }); }
       return i;
     };
-    const readCol = function (i) { return sheet.getRange(2, i + 1, lastRow - 1, 1).getValues(); };
+    const readCol = function (i) { return sheet.getRange(2, i + 1, lastRow - 1, 1).getDisplayValues(); };
     const condCols = [];
     conds.forEach(function (c) {
       const i = colOf(c.col);
       if (i === -1) res.missing.push(c.col);
-      else condCols.push({ vals: readCol(i), value: norm(c.value), mode: c.mode || 'contains' });
+      else condCols.push({ vals: readCol(i), test: makeCondTest_(c) });
     });
     if (res.missing.length) { res.count = null; return; }
     let gVals = null;
+    const gLabel = {};
     if (groupBy) {
       const gi = colOf(groupBy);
       if (gi === -1) res.missing.push(groupBy); else gVals = readCol(gi);
@@ -780,15 +785,15 @@ function handleQueryStats_(req) {
     for (let r = 0; r < lastRow - 1; r++) {
       let ok = true;
       for (let k = 0; k < condCols.length && ok; k++) {
-        const cc = condCols[k], v = norm(cc.vals[r][0]);
-        if (cc.mode === 'equals') ok = v === cc.value;
-        else if (cc.mode === 'notempty') ok = v !== '';
-        else ok = v.indexOf(cc.value) !== -1;
+        ok = condCols[k].test(normQ_(condCols[k].vals[r][0]));
       }
       if (!ok) continue;
       res.count++;
       if (gVals) {
-        const gk = String(gVals[r][0] == null ? '' : gVals[r][0]).trim() || '(Kosong)';
+        // Gabung nilai yang sama walaupun beza huruf besar/kecil atau ruang
+        const nk = normQ_(gVals[r][0]);
+        if (!gLabel[nk]) gLabel[nk] = labelQ_(gVals[r][0]) || '(Kosong)';
+        const gk = gLabel[nk];
         res.groups[gk] = (res.groups[gk] || 0) + 1;
       }
     }
@@ -798,6 +803,135 @@ function handleQueryStats_(req) {
   return out;
 }
 
+
+
+/**
+ * ============================================================================
+ * ENJIN SYARAT CARIAN MELUAS (padanan TEPAT)
+ * - Nilai dibanding seperti yang DIPAPARKAN dalam Sheet (getDisplayValues),
+ *   jadi tarikh, nombor & sifar di depan kekal sama seperti yang dilihat.
+ * - Ruang berlebihan / ruang tak nampak dibuang, huruf besar/kecil diabaikan.
+ * mode: 'in' (pilih & tick nilai seperti Excel) | 'contains' | 'equals' | 'notempty'
+ * ============================================================================
+ */
+function normQ_(v) {
+  return String(v == null ? '' : v)
+    .replace(/[\u00A0\u2007\u202F\u200B\u200C\u200D\uFEFF]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toUpperCase();
+}
+
+function labelQ_(v) {
+  return String(v == null ? '' : v)
+    .replace(/[\u00A0\u2007\u202F\u200B\u200C\u200D\uFEFF]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function cleanConds_(list) {
+  return (list || []).filter(function (c) {
+    if (!c || !c.col) return false;
+    const mode = c.mode || 'contains';
+    if (mode === 'in') return Array.isArray(c.values) && c.values.length > 0;
+    if (mode === 'notempty') return true;
+    return normQ_(c.value) !== '';
+  }).slice(0, 8).map(function (c) {
+    const mode = c.mode || 'contains';
+    return {
+      col: String(c.col),
+      mode: mode,
+      value: mode === 'in' ? '' : String(c.value == null ? '' : c.value),
+      values: mode === 'in' ? c.values.slice(0, 5000).map(function (x) { return String(x == null ? '' : x); }) : []
+    };
+  });
+}
+
+function makeCondTest_(c) {
+  const mode = c.mode || 'contains';
+  if (mode === 'notempty') return function (v) { return v !== ''; };
+  if (mode === 'in') {
+    const set = {};
+    (c.values || []).forEach(function (x) { set[normQ_(x)] = true; });
+    return function (v) { return Object.prototype.hasOwnProperty.call(set, v); };
+  }
+  const want = normQ_(c.value);
+  if (mode === 'equals') return function (v) { return v === want; };
+  return function (v) { return v.indexOf(want) !== -1; };
+}
+
+function sheetHeadersQ_(sheet, lastCol) {
+  return sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(function (h) { return String(h || '').trim(); });
+}
+
+function colOfQ_(headers, name) {
+  let i = headers.indexOf(name);
+  if (i === -1) { const n = normQ_(name); i = headers.findIndex(function (h) { return normQ_(h) === n; }); }
+  return i;
+}
+
+/**
+ * ============================================================================
+ * CARIAN MELUAS — SENARAI NILAI UNIK SATU KOLUM (untuk menu tick gaya Excel)
+ * req.categories, req.col, req.conditions (syarat lain), req.search, req.limit
+ * ============================================================================
+ */
+function handleDistinctValues_(req) {
+  const cats = (req.categories || []).filter(function (c) { return ['MURID', 'GURU', 'AKP'].indexOf(c) !== -1; });
+  if (!cats.length) return { status: 'error', message: 'Sila pilih sekurang-kurangnya satu data.' };
+  const col = String(req.col || '').trim();
+  if (!col) return { status: 'error', message: 'Sila pilih kolum dahulu.' };
+  const conds = cleanConds_(req.conditions);
+  const search = normQ_(req.search);
+  const limit = Math.max(50, Math.min(Number(req.limit) || 3000, 5000));
+
+  const cache = CacheService.getScriptCache();
+  const ck = 'D' + getDataVersion_() + '|' + Utilities.base64EncodeWebSafe(
+    Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, JSON.stringify([cats, col, conds, search, limit])));
+  const hit = cache.get(ck);
+  if (hit && !req.refresh) { try { return JSON.parse(hit); } catch (e) {} }
+
+  const map = {};
+  const missingIn = [];
+  let matchedRows = 0;
+  cats.forEach(function (cat) {
+    const sheet = getTargetSheet_(cat);
+    const lastRow = sheet.getLastRow(), lastCol = sheet.getLastColumn();
+    if (lastRow < 2 || lastCol < 1) return;
+    const headers = sheetHeadersQ_(sheet, lastCol);
+    const vi = colOfQ_(headers, col);
+    if (vi === -1) { missingIn.push(cat); return; }
+    const n = lastRow - 1;
+    const readDisp = function (i) { return sheet.getRange(2, i + 1, n, 1).getDisplayValues(); };
+    const condCols = [];
+    let lacks = false;
+    conds.forEach(function (c) {
+      const i = colOfQ_(headers, c.col);
+      if (i === -1) lacks = true; else condCols.push({ vals: readDisp(i), test: makeCondTest_(c) });
+    });
+    if (lacks) return; // data ini tiada kolum syarat lain -> tiada rekod sepadan
+    const vals = readDisp(vi);
+    for (let r = 0; r < n; r++) {
+      let ok = true;
+      for (let k = 0; k < condCols.length && ok; k++) ok = condCols[k].test(normQ_(condCols[k].vals[r][0]));
+      if (!ok) continue;
+      const key = normQ_(vals[r][0]);
+      if (search && key.indexOf(search) === -1) continue;
+      matchedRows++;
+      if (map[key]) map[key].n++;
+      else map[key] = { v: labelQ_(vals[r][0]), n: 1 };
+    }
+  });
+
+  let list = Object.keys(map).map(function (k) { return [map[k].v, map[k].n]; });
+  const distinct = list.length;
+  const truncated = distinct > limit;
+  if (truncated) list.sort(function (a, b) { return b[1] - a[1]; }), list = list.slice(0, limit);
+
+  const out = { status: 'success', col: col, values: list, distinct: distinct, rows: matchedRows, truncated: truncated, missingIn: missingIn };
+  try { const s = JSON.stringify(out); if (s.length < 95000) cache.put(ck, s, 21600); } catch (e) {}
+  return out;
+}
 
 /**
  * ============================================================================
@@ -812,7 +946,7 @@ function handleQueryStats_(req) {
 function handleQueryRows_(req) {
   const cat = String(req.category || '');
   if (['MURID', 'GURU', 'AKP'].indexOf(cat) === -1) return { status: 'error', message: 'Kategori tidak sah.' };
-  const conds = (req.conditions || []).filter(function (c) { return c && c.col; }).slice(0, 6);
+  const conds = cleanConds_(req.conditions);
   const limit = Math.max(1, Math.min(Number(req.limit) || 5000, 60000));
 
   const sheet = getTargetSheet_(cat);
@@ -848,7 +982,6 @@ function handleQueryRows_(req) {
   const rawCache = {}, dispCache = {};
   if (useFull) {
     const rg = sheet.getRange(2, 1, nRows, lastCol);
-    fullVals = rg.getValues();
     fullDisp = rg.getDisplayValues();
   }
   const raw = function (i) {
@@ -864,15 +997,12 @@ function handleQueryRows_(req) {
   const rawAt = function (r, i) { return useFull ? fullVals[r][i] : raw(i)[r][0]; };
   const dispAt = function (r, i) { return useFull ? fullDisp[r][i] : disp(i)[r][0]; };
 
-  const condObjs = conds.map(function (c, k) { return { i: condIdx[k], value: norm(c.value), mode: c.mode || 'contains' }; });
+  const condObjs = conds.map(function (c, k) { return { i: condIdx[k], test: makeCondTest_(c) }; });
   const matched = [];
   for (let r = 0; r < nRows; r++) {
     let ok = true;
     for (let k = 0; k < condObjs.length && ok; k++) {
-      const cc = condObjs[k], v = norm(rawAt(r, cc.i));
-      if (cc.mode === 'equals') ok = v === cc.value;
-      else if (cc.mode === 'notempty') ok = v !== '';
-      else ok = v.indexOf(cc.value) !== -1;
+      ok = condObjs[k].test(normQ_(dispAt(r, condObjs[k].i)));
     }
     if (ok) matched.push(r);
   }
