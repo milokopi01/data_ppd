@@ -966,6 +966,12 @@
         </p>
       </div>
 
+      <div id="schoolLoadingCard" class="card-3d empty-state" style="display:none;">
+        <div class="spinner" style="width:34px; height:34px; border-width:4px; margin:0 auto 14px;"></div>
+        <h3 id="schoolLoadingTitle" style="font-size:1.05rem; font-weight:800; color:var(--text-main); margin-bottom:6px;">Memuat data sekolah...</h3>
+        <p id="schoolLoadingSub" style="font-size:0.86rem; max-width:520px; margin:0 auto;">Sedang mengambil data Murid, Guru &amp; AKP dari Google Sheet.</p>
+      </div>
+
       <!-- HASIL PAPARAN SEKOLAH -->
       <div id="schoolResultArea" style="display:none;">
         <!-- BANNER SEKOLAH -->
@@ -1402,7 +1408,7 @@
         try {
           const res = await callGAS({ action: 'getMetadata' });
           applyMetadata(res);
-          try { localStorage.setItem(META_LS_KEY, JSON.stringify({ url: state.gasUrl, data: { headers: res.headers, counts: res.counts, schools: res.schools } })); } catch (e) {}
+          try { localStorage.setItem(META_LS_KEY, JSON.stringify({ url: state.gasUrl, data: { dataVer: res.dataVer || '', headers: res.headers, counts: res.counts, schools: res.schools } })); } catch (e) {}
           conn.lastOk = Date.now();
           conn.retryDelay = 5000;
           setConnStatus(true, `${state.metadata.schools.length} Sekolah`);
@@ -1422,6 +1428,7 @@
 
     function applyMetadata(res) {
         state.metadata = {
+          dataVer: res.dataVer || '',
           headers: res.headers || { MURID: [], GURU: [], AKP: [] },
           counts: res.counts || { MURID: 0, GURU: 0, AKP: 0 },
           schools: res.schools || []
@@ -1497,6 +1504,16 @@
       }
     });
 
+    // Mula ambil data lebih awal bila tetikus/jari berada atas pilihan sekolah
+    schoolDropdown.addEventListener('mouseover', (e) => {
+      const item = e.target.closest('.autocomplete-item');
+      if (item) prefetchSchool(item.dataset.kod);
+    });
+    schoolDropdown.addEventListener('touchstart', (e) => {
+      const item = e.target.closest('.autocomplete-item');
+      if (item) prefetchSchool(item.dataset.kod);
+    }, { passive: true });
+
     schoolDropdown.addEventListener('click', (e) => {
       const item = e.target.closest('.autocomplete-item');
       if (!item) return;
@@ -1514,46 +1531,167 @@
     document.getElementById('btnLoadSchool').addEventListener('click', loadSelectedSchool);
     document.getElementById('btnRefreshMeta').addEventListener('click', async () => {
       const ok = await loadMetadata();
-      if (ok) showToast('Indeks sekolah berjaya disegarkan.');
+      if (state.currentSchool) {
+        await loadSelectedSchool({ kod: state.currentSchool.kodSekolah, force: true });
+      } else if (ok) {
+        showToast('Indeks sekolah berjaya disegarkan.');
+      }
     });
 
-    async function loadSelectedSchool() {
-      const raw = schoolInput.value.trim();
+    /* ------------------------------------------------------------------
+     * CACHE DATA SEKOLAH DI PERANTI (pilih sekolah yang sama = serta-merta)
+     * ------------------------------------------------------------------ */
+    const SCHOOL_LS_KEY = 'ds_school_cache_v1';
+    const SCHOOL_LS_MAX = 15;
+    const schoolMem = new Map();      // kod -> { ver, t, data }
+    const schoolInflight = new Map(); // kod -> Promise
+
+    function schoolLsLoad() {
+      try { return JSON.parse(localStorage.getItem(SCHOOL_LS_KEY) || '{}') || {}; } catch (e) { return {}; }
+    }
+
+    function getCachedSchool(kod) {
+      let c = schoolMem.get(kod);
+      if (!c) {
+        const all = schoolLsLoad();
+        if (all[kod]) { c = all[kod]; schoolMem.set(kod, c); }
+      }
+      if (!c) return null;
+      // Abaikan cache jika data di Google Sheet sudah berubah (versi berbeza)
+      if (state.metadata.dataVer && c.ver && c.ver !== state.metadata.dataVer) return null;
+      return c;
+    }
+
+    function putCachedSchool(kod, data) {
+      const entry = { ver: data.dataVer || state.metadata.dataVer || '', t: Date.now(), data };
+      schoolMem.set(kod, entry);
+      const all = schoolLsLoad();
+      all[kod] = entry;
+      const keys = Object.keys(all).sort((a, b) => (all[b].t || 0) - (all[a].t || 0));
+      keys.slice(SCHOOL_LS_MAX).forEach(k => delete all[k]);
+      for (let i = 0; i < 4; i++) {
+        try { localStorage.setItem(SCHOOL_LS_KEY, JSON.stringify(all)); break; }
+        catch (e) {
+          // Storan penuh: buang rekod paling lama dan cuba lagi
+          const ks = Object.keys(all).sort((a, b) => (all[a].t || 0) - (all[b].t || 0));
+          if (ks.length <= 1) break;
+          delete all[ks[0]];
+        }
+      }
+    }
+
+    function fetchSchool(kod, force = false) {
+      const key = kod + (force ? '|f' : '');
+      if (schoolInflight.has(key)) return schoolInflight.get(key);
+      const p = callGAS({ action: 'getSchoolData', kodSekolah: kod, refresh: force })
+        .then(res => { putCachedSchool(res.kodSekolah || kod, res); return res; })
+        .finally(() => schoolInflight.delete(key));
+      schoolInflight.set(key, p);
+      return p;
+    }
+
+    function prefetchSchool(kod) {
+      if (!kod || getCachedSchool(kod) || schoolInflight.has(kod)) return;
+      fetchSchool(kod).catch(() => {});
+    }
+
+    function applySchoolData(res, keepTableState) {
+      const sameSchool = keepTableState && state.currentSchool && state.currentSchool.kodSekolah === res.kodSekolah;
+      state.currentSchool = res;
+      ['MURID', 'GURU', 'AKP'].forEach((cat) => {
+        const hdrs = res.data[cat]?.headers || [];
+        if (!state.selectedCols[cat] || !state.selectedCols[cat].some(c => hdrs.includes(c))) {
+          state.selectedCols[cat] = getSmartDefaultCols(cat, hdrs);
+        }
+        if (!sameSchool) {
+          state.tableState[cat].page = 1;
+          state.tableState[cat].search = '';
+          state.tableState[cat].sortKey = null;
+          state.tableState[cat].sortAsc = true;
+          state.tableState[cat].filters = {};
+        }
+      });
+      document.getElementById('schoolLoadingCard').style.display = 'none';
+      renderSchoolDashboard();
+    }
+
+    function showSchoolLoading(kod) {
+      document.getElementById('dashboardPlaceholder').style.display = 'none';
+      document.getElementById('schoolResultArea').style.display = 'none';
+      const card = document.getElementById('schoolLoadingCard');
+      card.style.display = 'block';
+      const nama = (state.metadata.schools.find(s => s.kod === kod) || {}).nama || '';
+      document.getElementById('schoolLoadingTitle').textContent = `Memuat data ${kod}${nama ? ' — ' + nama : ''}...`;
+      const sub = document.getElementById('schoolLoadingSub');
+      const t0 = Date.now();
+      clearInterval(showSchoolLoading._timer);
+      const upd = () => {
+        const sec = Math.round((Date.now() - t0) / 1000);
+        sub.textContent = sec < 4
+          ? 'Sedang mengambil data Murid, Guru & AKP dari Google Sheet...'
+          : `Sedang mengambil data dari Google Sheet... ${sec}s (kali pertama untuk sekolah ini lebih lama, seterusnya serta-merta)`;
+      };
+      upd();
+      showSchoolLoading._timer = setInterval(upd, 1000);
+    }
+
+    function hideSchoolLoading() {
+      clearInterval(showSchoolLoading._timer);
+      document.getElementById('schoolLoadingCard').style.display = 'none';
+    }
+
+    let schoolRequestSeq = 0;
+
+    async function loadSelectedSchool(opts) {
+      const o = (opts && typeof opts === 'object' && !(opts instanceof Event)) ? opts : {};
+      const raw = (o.kod || schoolInput.value).trim();
       if (!raw) {
         showToast('Sila taip atau pilih Kod Sekolah terlebih dahulu.', true);
         return;
       }
       // Ambil kod pertama sekiranya pengguna menaip kod + nama
       const kod = raw.split(/\s+/)[0].toUpperCase();
+      const seq = ++schoolRequestSeq;
       const btn = document.getElementById('btnLoadSchool');
-      const oldHtml = btn.innerHTML;
+
+      // 1) Ada dalam peranti? Papar SERTA-MERTA
+      const cached = o.force ? null : getCachedSchool(kod);
+      if (cached) {
+        applySchoolData(cached.data, false);
+        // Segar senyap di latar belakang jika cache lebih 10 minit
+        if (Date.now() - (cached.t || 0) > 10 * 60 * 1000) {
+          fetchSchool(kod).then(res => {
+            if (seq === schoolRequestSeq) applySchoolData(res, true);
+          }).catch(() => {});
+        }
+        return;
+      }
+
+      // 2) Belum ada: ambil dari Google Sheet
+      const oldHtml = btn.dataset.html || btn.innerHTML;
+      btn.dataset.html = oldHtml;
       btn.disabled = true;
       btn.innerHTML = `<span class="spinner" style="border-top-color:#fff; border-color:rgba(255,255,255,0.3);"></span> Memuat Data...`;
+      const keepView = o.force && state.currentSchool && state.currentSchool.kodSekolah === kod;
+      if (!keepView) showSchoolLoading(kod);
 
       try {
-        const res = await callGAS({ action: 'getSchoolData', kodSekolah: kod });
-        state.currentSchool = res;
-
-        // Pastikan pilihan kolum dikemas kini dengan header sebenar
-        ['MURID', 'GURU', 'AKP'].forEach((cat) => {
-          const hdrs = res.data[cat]?.headers || [];
-          if (!state.selectedCols[cat] || !state.selectedCols[cat].some(c => hdrs.includes(c))) {
-            state.selectedCols[cat] = getSmartDefaultCols(cat, hdrs);
-          }
-          state.tableState[cat].page = 1;
-          state.tableState[cat].search = '';
-          state.tableState[cat].sortKey = null;
-          state.tableState[cat].sortAsc = true;
-          state.tableState[cat].filters = {};
-        });
-
-        renderSchoolDashboard();
-        showToast(`Data sekolah ${res.kodSekolah} berjaya dimuatkan.`);
+        const res = await fetchSchool(kod, !!o.force);
+        if (seq !== schoolRequestSeq) return; // pengguna sudah pilih sekolah lain
+        hideSchoolLoading();
+        applySchoolData(res, !!keepView);
+        if (o.force) showToast(`Data sekolah ${res.kodSekolah} telah disegarkan.`);
       } catch (err) {
+        if (seq !== schoolRequestSeq) return;
+        hideSchoolLoading();
+        if (!state.currentSchool) document.getElementById('dashboardPlaceholder').style.display = 'block';
+        else document.getElementById('schoolResultArea').style.display = 'block';
         showToast(err.message, true);
       } finally {
-        btn.disabled = false;
-        btn.innerHTML = oldHtml;
+        if (seq === schoolRequestSeq) {
+          btn.disabled = false;
+          btn.innerHTML = oldHtml;
+        }
       }
     }
 

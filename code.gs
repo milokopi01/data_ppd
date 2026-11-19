@@ -48,7 +48,7 @@ function doGet(e) {
     status: 'ok',
     app: 'dashboard-data-sekolah',
     message: 'API Dashboard Data Sekolah aktif.',
-    version: '2.1'
+    version: '3.0'
   });
 }
 
@@ -83,7 +83,7 @@ function doPost(e) {
     }
 
     if (action === 'getSchoolData') {
-      return jsonResponse_(handleGetSchoolData_(req.kodSekolah));
+      return jsonResponse_(handleGetSchoolData_(req.kodSekolah, req.refresh === true));
     }
 
     if (action === 'uploadBatch') {
@@ -194,7 +194,59 @@ function clearJsonFromProps_(prefix) {
 
 function invalidateMetadata_() {
   clearJsonFromProps_(META_PREFIX);
-  try { CacheService.getScriptCache().remove('META_READY'); } catch (e) {}
+  bumpDataVersion_();
+}
+
+/** Versi data: berubah setiap kali data dimuat naik / disusun. Cache lama automatik tidak dipakai. */
+function getDataVersion_() {
+  const p = PropertiesService.getScriptProperties();
+  let v = p.getProperty('DATA_VER');
+  if (!v) { v = String(Date.now()); p.setProperty('DATA_VER', v); }
+  return v;
+}
+
+function bumpDataVersion_() {
+  PropertiesService.getScriptProperties().setProperty('DATA_VER', String(Date.now()));
+}
+
+/**
+ * Susun setiap tab mengikut Kod Sekolah jika baris sekolah bertaburan.
+ * Selepas disusun, data satu sekolah berada dalam satu blok baris, jadi
+ * bacaan data sekolah menjadi SANGAT pantas (1 bacaan sahaja setiap tab).
+ */
+function sortSheetsIfScattered_(meta) {
+  if (!meta || !meta.index) return false;
+  const lock = LockService.getScriptLock();
+  const hadLock = lock.hasLock();
+  if (!hadLock && !lock.tryLock(3000)) return false;
+  let sorted = false;
+  try {
+    ['MURID', 'GURU', 'AKP'].forEach(function (cat) {
+      const idx = meta.index[cat];
+      if (!idx) return;
+      const kods = Object.keys(idx);
+      if (!kods.length) return;
+      let runs = 0;
+      kods.forEach(function (k) { runs += idx[k].length; });
+      if (runs <= Math.ceil(kods.length * 1.2)) return; // sudah tersusun
+      const headers = meta.headers[cat] || [];
+      const kodIdx = findColIndex_(headers, ['KODSEKOLAH', 'KOD_SEKOLAH', 'KOD SEKOLAH', 'KOD']);
+      if (kodIdx === -1) return;
+      const sheet = getTargetSheet_(cat);
+      const lastRow = sheet.getLastRow();
+      const lastCol = sheet.getLastColumn();
+      if (lastRow < 3 || lastCol < 1) return;
+      sheet.getRange(2, 1, lastRow - 1, lastCol).sort({ column: kodIdx + 1, ascending: true });
+      sorted = true;
+    });
+    if (sorted) {
+      SpreadsheetApp.flush();
+      bumpDataVersion_();
+    }
+  } finally {
+    if (!hadLock) lock.releaseLock();
+  }
+  return sorted;
 }
 
 function getMetadataCached_(forceRebuild) {
@@ -202,11 +254,16 @@ function getMetadataCached_(forceRebuild) {
     const cached = loadJsonFromProps_(META_PREFIX);
     if (cached && cached.status === 'success') {
       cached.cached = true;
+      cached.dataVer = getDataVersion_();
       delete cached.index; // indeks baris tidak perlu dihantar ke pelayar
       return cached;
     }
   }
-  const fresh = handleGetMetadata_();
+  let fresh = handleGetMetadata_();
+  try {
+    if (sortSheetsIfScattered_(fresh)) fresh = handleGetMetadata_();
+  } catch (e) {}
+  fresh.dataVer = getDataVersion_();
   try {
     saveJsonToProps_(META_PREFIX, fresh);
   } catch (e) {
@@ -247,6 +304,7 @@ function buangAutoSegar() {
 }
 
 function autoSegarIndeks_() {
+  const started = Date.now();
   const lock = LockService.getScriptLock();
   // Jangan bina semula semasa muat naik sedang berjalan
   if (!lock.tryLock(5000)) return;
@@ -255,6 +313,18 @@ function autoSegarIndeks_() {
   } finally {
     lock.releaseLock();
   }
+  // Sediakan data SETIAP sekolah lebih awal supaya pilihan sekolah keluar serta-merta
+  const meta = loadJsonFromProps_(META_PREFIX);
+  if (meta) panaskanCacheSekolah_(meta, started + 5 * 60 * 1000);
+}
+
+/** Jalankan secara manual untuk sediakan data semua sekolah serta-merta. */
+function sediakanDataSemuaSekolah() {
+  const started = Date.now();
+  let meta = loadJsonFromProps_(META_PREFIX);
+  if (!meta || !meta.index) { getMetadataCached_(true); meta = loadJsonFromProps_(META_PREFIX); }
+  const n = panaskanCacheSekolah_(meta, started + 5 * 60 * 1000);
+  return 'Data ' + n + ' set sekolah telah disediakan.';
 }
 
 /** Jalankan secara manual jika data diubah terus dalam Google Sheet. */
@@ -333,9 +403,87 @@ function handleGetMetadata_() {
 }
 
 /**
+ * ============================================================================
+ * CACHE DATA SEKOLAH (supaya pilih sekolah keluar dalam 1-2 saat)
+ * Data setiap sekolah dimampatkan dan disimpan dalam CacheService.
+ * ============================================================================
+ */
+const SC_CHUNK = 90000;
+const SC_TTL = 21600; // 6 jam (maksimum CacheService)
+
+function scKey_(ver, cat, kod) { return 'S' + ver + '|' + cat + '|' + kod; }
+
+function packJson_(obj) {
+  const blob = Utilities.newBlob(JSON.stringify(obj), 'application/json');
+  return Utilities.base64Encode(Utilities.gzip(blob).getBytes());
+}
+
+function unpackJson_(b64) {
+  const blob = Utilities.newBlob(Utilities.base64Decode(b64), 'application/x-gzip');
+  return JSON.parse(Utilities.ungzip(blob).getDataAsString());
+}
+
+function scAddEntries_(base, obj, out) {
+  const text = packJson_(obj);
+  let n = 0;
+  for (let i = 0; i < text.length; i += SC_CHUNK) {
+    out[base + '#' + n] = text.substring(i, i + SC_CHUNK);
+    n++;
+  }
+  out[base + '#n'] = String(n);
+}
+
+function scPutMany_(entries) {
+  const cache = CacheService.getScriptCache();
+  let batch = {}, size = 0, count = 0;
+  const send = function () {
+    if (!count) return;
+    try { cache.putAll(batch, SC_TTL); }
+    catch (e) {
+      Object.keys(batch).forEach(function (k) { try { cache.put(k, batch[k], SC_TTL); } catch (e2) {} });
+    }
+    batch = {}; size = 0; count = 0;
+  };
+  Object.keys(entries).forEach(function (k) {
+    batch[k] = entries[k];
+    size += entries[k].length;
+    count++;
+    if (count >= 60 || size > 700000) send();
+  });
+  send();
+}
+
+function scGetMany_(bases) {
+  const out = {};
+  try {
+    const cache = CacheService.getScriptCache();
+    const ns = cache.getAll(bases.map(function (b) { return b + '#n'; }));
+    const keys = [];
+    bases.forEach(function (b) {
+      const n = Number(ns[b + '#n'] || 0);
+      for (let i = 0; i < n; i++) keys.push(b + '#' + i);
+    });
+    if (!keys.length) return out;
+    const vals = cache.getAll(keys);
+    bases.forEach(function (b) {
+      const n = Number(ns[b + '#n'] || 0);
+      if (!n) return;
+      let t = '';
+      for (let i = 0; i < n; i++) {
+        const v = vals[b + '#' + i];
+        if (v === undefined || v === null) { t = null; break; }
+        t += v;
+      }
+      if (t) { try { out[b] = unpackJson_(t); } catch (e) {} }
+    });
+  } catch (e) {}
+  return out;
+}
+
+/**
  * Ambil semua rekod Murid, Guru, dan AKP bagi satu Kod Sekolah tertentu
  */
-function handleGetSchoolData_(kodInput) {
+function handleGetSchoolData_(kodInput, forceRefresh) {
   const targetKod = normalizeCode_(kodInput);
   if (!targetKod) {
     return { status: 'error', message: 'Sila masukkan Kod Sekolah yang sah.' };
@@ -346,80 +494,156 @@ function handleGetSchoolData_(kodInput) {
     status: 'success',
     kodSekolah: targetKod,
     namaSekolah: '',
-    data: {}
+    data: {},
+    fromCache: true
   };
 
-  const CHUNK_SIZE = 10000;
-  const meta = loadJsonFromProps_(META_PREFIX);
-  const index = meta && meta.index ? meta.index : null;
+  const ver = getDataVersion_();
+  result.dataVer = ver;
+  const bases = categories.map(function (c) { return scKey_(ver, c, targetKod); });
+  const cached = forceRefresh ? {} : scGetMany_(bases);
+  let meta = null;
+  const toPut = {};
 
-  categories.forEach(function (cat) {
-    const sheet = getTargetSheet_(cat);
-    const lastRow = sheet.getLastRow();
-    const lastCol = sheet.getLastColumn();
-
-    if (lastRow < 2 || lastCol < 1) {
-      result.data[cat] = { headers: [], rows: [] };
-      return;
+  categories.forEach(function (cat, i) {
+    let ds = cached[bases[i]];
+    if (!ds) {
+      result.fromCache = false;
+      if (!meta) meta = loadJsonFromProps_(META_PREFIX);
+      ds = readSchoolCategory_(cat, targetKod, meta);
+      scAddEntries_(bases[i], ds, toPut);
     }
-
-    const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(function (h) {
-      return String(h || '').trim();
-    });
-
-    const kodIdx = findColIndex_(headers, ['KODSEKOLAH', 'KOD_SEKOLAH', 'KOD SEKOLAH', 'KOD']);
-    const namaIdx = findColIndex_(headers, ['NAMA_SEKOLAH', 'NAMASEKOLAH', 'NAMA SEKOLAH', 'SEKOLAH']);
-
-    if (kodIdx === -1) {
-      result.data[cat] = { headers: headers, rows: [] };
-      return;
-    }
-
-    const matchedRows = [];
-
-    // LALUAN PANTAS: guna indeks lokasi baris (hanya baca baris sekolah ini)
-    if (index && index[cat]) {
-      const runs = index[cat][targetKod] || [];
-      runs.forEach(function (run) {
-        if (run[0] > lastRow) return;
-        const n = Math.min(run[1], lastRow - run[0] + 1);
-        const vals = sheet.getRange(run[0], 1, n, lastCol).getDisplayValues();
-        vals.forEach(function (row) {
-          if (normalizeCode_(row[kodIdx]) === targetKod) {
-            matchedRows.push(row);
-            if (!result.namaSekolah && namaIdx !== -1 && row[namaIdx]) {
-              result.namaSekolah = String(row[namaIdx]).trim();
-            }
-          }
-        });
-      });
-      result.data[cat] = { headers: headers, rows: matchedRows };
-      return;
-    }
-
-    // LALUAN BIASA: baca lajur Kod Sekolah sahaja, kemudian baris yang sepadan
-    const kodCol = sheet.getRange(2, kodIdx + 1, lastRow - 1, 1).getValues();
-    const runsFound = [];
-    for (let r = 0; r < kodCol.length; r++) {
-      if (normalizeCode_(kodCol[r][0]) !== targetKod) continue;
-      const sr = r + 2;
-      const lr = runsFound[runsFound.length - 1];
-      if (lr && lr[0] + lr[1] === sr) lr[1]++;
-      else runsFound.push([sr, 1]);
-    }
-    runsFound.forEach(function (run) {
-      const vals = sheet.getRange(run[0], 1, run[1], lastCol).getDisplayValues();
-      vals.forEach(function (row) {
-        matchedRows.push(row);
-        if (!result.namaSekolah && namaIdx !== -1 && row[namaIdx]) {
-          result.namaSekolah = String(row[namaIdx]).trim();
-        }
-      });
-    });
-    result.data[cat] = { headers: headers, rows: matchedRows };
+    result.data[cat] = { headers: ds.headers || [], rows: ds.rows || [] };
+    if (!result.namaSekolah && ds.nama) result.namaSekolah = ds.nama;
   });
 
+  if (Object.keys(toPut).length) {
+    try { scPutMany_(toPut); } catch (e) {}
+  }
   return result;
+}
+
+/** Baca rekod satu sekolah bagi satu kategori terus dari Google Sheet. */
+function readSchoolCategory_(cat, targetKod, meta) {
+  const sheet = getTargetSheet_(cat);
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+
+  if (lastRow < 2 || lastCol < 1) return { headers: [], rows: [], nama: '' };
+
+  const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(function (h) {
+    return String(h || '').trim();
+  });
+
+  const kodIdx = findColIndex_(headers, ['KODSEKOLAH', 'KOD_SEKOLAH', 'KOD SEKOLAH', 'KOD']);
+  const namaIdx = findColIndex_(headers, ['NAMA_SEKOLAH', 'NAMASEKOLAH', 'NAMA SEKOLAH', 'SEKOLAH']);
+  if (kodIdx === -1) return { headers: headers, rows: [], nama: '' };
+
+  const rows = [];
+  let nama = '';
+  const take = function (row) {
+    if (normalizeCode_(row[kodIdx]) !== targetKod) return;
+    rows.push(row);
+    if (!nama && namaIdx !== -1 && row[namaIdx]) nama = String(row[namaIdx]).trim();
+  };
+
+  // LALUAN PANTAS: guna indeks lokasi baris (hanya baca baris sekolah ini)
+  const index = meta && meta.index ? meta.index : null;
+  if (index && index[cat]) {
+    const runs = index[cat][targetKod] || [];
+    runs.forEach(function (run) {
+      if (run[0] > lastRow) return;
+      const n = Math.min(run[1], lastRow - run[0] + 1);
+      sheet.getRange(run[0], 1, n, lastCol).getDisplayValues().forEach(take);
+    });
+    return { headers: headers, rows: rows, nama: nama };
+  }
+
+  // LALUAN BIASA: baca lajur Kod Sekolah sahaja, kemudian baris yang sepadan
+  const kodCol = sheet.getRange(2, kodIdx + 1, lastRow - 1, 1).getValues();
+  const runsFound = [];
+  for (let r = 0; r < kodCol.length; r++) {
+    if (normalizeCode_(kodCol[r][0]) !== targetKod) continue;
+    const sr = r + 2;
+    const lr = runsFound[runsFound.length - 1];
+    if (lr && lr[0] + lr[1] === sr) lr[1]++;
+    else runsFound.push([sr, 1]);
+  }
+  runsFound.forEach(function (run) {
+    sheet.getRange(run[0], 1, run[1], lastCol).getDisplayValues().forEach(take);
+  });
+  return { headers: headers, rows: rows, nama: nama };
+}
+
+/**
+ * Sediakan cache data untuk SEMUA sekolah sekali gus (dipanggil oleh pemicu auto-segar).
+ * Jika tab sudah tersusun ikut Kod Sekolah, seluruh tab dibaca berperingkat sekali sahaja.
+ */
+function panaskanCacheSekolah_(meta, deadlineMs) {
+  if (!meta || !meta.index) return 0;
+  const ver = getDataVersion_();
+  let done = 0;
+
+  ['MURID', 'GURU', 'AKP'].forEach(function (cat) {
+    if (Date.now() > deadlineMs) return;
+    const idx = meta.index[cat];
+    const headers = meta.headers[cat] || [];
+    if (!idx || !headers.length) return;
+    const kodIdx = findColIndex_(headers, ['KODSEKOLAH', 'KOD_SEKOLAH', 'KOD SEKOLAH', 'KOD']);
+    const namaIdx = findColIndex_(headers, ['NAMA_SEKOLAH', 'NAMASEKOLAH', 'NAMA SEKOLAH', 'SEKOLAH']);
+    if (kodIdx === -1) return;
+    const kods = Object.keys(idx);
+    const contiguous = kods.every(function (k) { return idx[k].length === 1; });
+
+    let entries = {}, entryCount = 0;
+    const flushEntries = function (force) {
+      if (entryCount && (force || entryCount >= 30)) {
+        scPutMany_(entries);
+        entries = {}; entryCount = 0;
+      }
+    };
+    const addSchool = function (kod, rows) {
+      let nama = '';
+      if (namaIdx !== -1) {
+        for (let i = 0; i < rows.length && !nama; i++) nama = String(rows[i][namaIdx] || '').trim();
+      }
+      scAddEntries_(scKey_(ver, cat, kod), { headers: headers, rows: rows, nama: nama }, entries);
+      entryCount++;
+      done++;
+      flushEntries(false);
+    };
+
+    if (contiguous) {
+      const sheet = getTargetSheet_(cat);
+      const lastRow = sheet.getLastRow();
+      const lastCol = headers.length;
+      const STEP = 4000;
+      let curKod = null, curRows = [], stopped = false;
+      for (let r = 2; r <= lastRow; r += STEP) {
+        if (Date.now() > deadlineMs) { stopped = true; break; }
+        const n = Math.min(STEP, lastRow - r + 1);
+        const vals = sheet.getRange(r, 1, n, lastCol).getDisplayValues();
+        for (let i = 0; i < vals.length; i++) {
+          const k = normalizeCode_(vals[i][kodIdx]);
+          if (!k) continue;
+          if (k !== curKod) {
+            if (curKod) addSchool(curKod, curRows);
+            curKod = k; curRows = [];
+          }
+          curRows.push(vals[i]);
+        }
+      }
+      if (!stopped && curKod) addSchool(curKod, curRows);
+    } else {
+      kods.forEach(function (k) {
+        if (Date.now() > deadlineMs) return;
+        const ds = readSchoolCategory_(cat, k, meta);
+        addSchool(k, ds.rows);
+      });
+    }
+    flushEntries(true);
+  });
+  return done;
 }
 
 /**
