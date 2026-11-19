@@ -2,7 +2,7 @@
 <html lang="ms">
 <head>
   <meta charset="UTF-8" />
-  <script>window.GAS_URL = 'https://script.google.com/macros/s/AKfycbyNXOOVNGYTIrB6HHuLOSKUBR-K8C62eLm_-FxiRx_xFXiHcfscdKcoduiHMVPJktU1oA/exec'; /* URL Web App Google Apps Script (KEKAL untuk semua pengguna) */</script>
+  <script>window.GAS_URL = 'https://script.google.com/macros/s/AKfycbwkLhAJFNA2K0sypbN4yqvecTavNG0fyqMstBCuc0QTnrVZVxBokSnys6f_pf6LHrUh/exec'; /* URL Web App Google Apps Script (KEKAL untuk semua pengguna) */</script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#ffffff" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -636,6 +636,48 @@
       background: #e2e8f0;
     }
 
+    /* ===== Tajuk kolum gaya Excel (Susun & Tapis) ===== */
+    table.data-table thead th.th-excel { padding: 8px 8px 8px 14px; cursor: default; }
+    .th-inner { display: flex; align-items: center; gap: 6px; }
+    .th-label { cursor: pointer; flex: 1; }
+    .th-sort-ind { font-size: 0.7rem; color: var(--primary); min-width: 10px; }
+    .th-filter-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 22px; height: 22px; padding: 0;
+      border: 1px solid #cbd5e1; border-radius: 5px;
+      background: #ffffff; color: #475569;
+      font-size: 0.7rem; line-height: 1; cursor: pointer;
+      box-shadow: 0 1px 0 #cbd5e1;
+    }
+    .th-filter-btn:hover { background: var(--primary-soft); border-color: var(--primary); color: var(--primary); }
+    th.is-filtered .th-filter-btn,
+    th.is-sorted .th-filter-btn { background: var(--primary); border-color: var(--primary-dark); color: #ffffff; }
+
+    .filter-menu {
+      position: fixed; z-index: 9999; display: none;
+      width: 280px; background: #ffffff;
+      border: 1px solid #cbd5e1; border-radius: 12px;
+      box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
+      padding: 8px; font-size: 0.84rem; color: var(--text-main);
+    }
+    .filter-menu.open { display: block; }
+    .fm-title { font-size: 0.72rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; padding: 4px 8px 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .fm-item {
+      display: flex; align-items: center; gap: 8px; width: 100%;
+      padding: 7px 8px; border: 0; border-radius: 7px; background: transparent;
+      font: inherit; font-weight: 600; color: inherit; text-align: left; cursor: pointer;
+    }
+    .fm-item:hover { background: var(--primary-soft); color: var(--primary); }
+    .fm-item.active { color: var(--primary); }
+    .fm-sep { height: 1px; background: var(--border-light); margin: 6px 0; }
+    .fm-search { width: 100%; padding: 7px 10px; border: 1px solid #cbd5e1; border-radius: 7px; font: inherit; margin-bottom: 6px; }
+    .fm-list { max-height: 230px; overflow-y: auto; border: 1px solid var(--border-light); border-radius: 8px; padding: 4px; }
+    .fm-check { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 5px; cursor: pointer; font-weight: 500; }
+    .fm-check:hover { background: #f1f5f9; }
+    .fm-check span.v { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .fm-check span.c { font-size: 0.72rem; color: var(--text-muted); }
+    .fm-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
+
     table.data-table tbody td {
       padding: 10px 14px;
       border-bottom: 1px solid #f1f5f9;
@@ -1142,9 +1184,9 @@
         AKP:   JSON.parse(localStorage.getItem('ds_cols_AKP')   || 'null')
       },
       tableState: {
-        MURID: { search: '', sortCol: -1, sortAsc: true, page: 1, pageSize: 25 },
-        GURU:  { search: '', sortCol: -1, sortAsc: true, page: 1, pageSize: 25 },
-        AKP:   { search: '', sortCol: -1, sortAsc: true, page: 1, pageSize: 25 }
+        MURID: { search: '', sortKey: null, sortAsc: true, filters: {}, page: 1, pageSize: 25 },
+        GURU:  { search: '', sortKey: null, sortAsc: true, filters: {}, page: 1, pageSize: 25 },
+        AKP:   { search: '', sortKey: null, sortAsc: true, filters: {}, page: 1, pageSize: 25 }
       },
       parsedFiles: { MURID: null, GURU: null, AKP: null },
       activeModalCat: null
@@ -1385,6 +1427,9 @@
           }
           state.tableState[cat].page = 1;
           state.tableState[cat].search = '';
+          state.tableState[cat].sortKey = null;
+          state.tableState[cat].sortAsc = true;
+          state.tableState[cat].filters = {};
         });
 
         renderSchoolDashboard();
@@ -1479,25 +1524,22 @@
       const ts = state.tableState[cat];
       const q = ts.search.trim().toLowerCase();
 
+      // Tapisan gaya Excel bagi setiap kolum
+      let filtered = applyColumnFilters(cat, allRows, headers, null);
+
       // Tapis carian dalam jadual
-      let filtered = allRows;
       if (q) {
-        filtered = allRows.filter(row =>
+        filtered = filtered.filter(row =>
           colIndexes.some(idx => String(row[idx] || '').toLowerCase().includes(q))
         );
       }
 
-      // Susunan kolum
-      if (ts.sortCol >= 0 && ts.sortCol < colIndexes.length) {
-        const realIdx = colIndexes[ts.sortCol];
-        filtered = [...filtered].sort((a, b) => {
-          const va = String(a[realIdx] || '');
-          const vb = String(b[realIdx] || '');
-          return ts.sortAsc
-            ? va.localeCompare(vb, 'ms', { numeric: true })
-            : vb.localeCompare(va, 'ms', { numeric: true });
-        });
+      // Susunan kolum gaya Excel (nombor, tarikh & teks dikenal pasti automatik)
+      const sortIdx = ts.sortKey ? headers.indexOf(ts.sortKey) : -1;
+      if (sortIdx >= 0) {
+        filtered = [...filtered].sort((a, b) => excelCompare(a[sortIdx], b[sortIdx], ts.sortAsc));
       }
+      const activeFilterCount = Object.keys(ts.filters || {}).filter(k => headers.includes(k)).length;
 
       // Halaman (Pagination)
       const total = filtered.length;
@@ -1511,6 +1553,8 @@
       let tableHtml = '';
       if (!headers.length) {
         tableHtml = `<div class="empty-state" style="padding:26px;">Tiada struktur data ditemui bagi kategori ${meta.label}.</div>`;
+      } else if (!total && (activeFilterCount || q)) {
+        tableHtml = `<div class="empty-state" style="padding:26px;">Tiada rekod sepadan dengan tapisan semasa. <button class="btn-3d btn-white btn-sm" data-clear-filters="${cat}" style="margin-left:8px;">✕ Kosongkan Tapisan</button></div>`;
       } else if (!total) {
         tableHtml = `<div class="empty-state" style="padding:26px;">Tiada rekod ${meta.label.toLowerCase()} ditemui bagi sekolah ini.</div>`;
       } else {
@@ -1520,9 +1564,18 @@
               <thead>
                 <tr>
                   <th style="width:52px;">Bil</th>
-                  ${activeCols.map((col, idx) => {
-                    const arrow = ts.sortCol === idx ? (ts.sortAsc ? ' ▲' : ' ▼') : '';
-                    return `<th data-sort-cat="${cat}" data-sort-idx="${idx}">${escapeHtml(col)}${arrow}</th>`;
+                  ${activeCols.map((col) => {
+                    const isSorted = ts.sortKey === col;
+                    const isFiltered = !!(ts.filters && ts.filters[col]);
+                    const arrow = isSorted ? (ts.sortAsc ? '▲' : '▼') : '';
+                    const icon = isFiltered ? '⧩' : '▾';
+                    return `<th class="th-excel ${isSorted ? 'is-sorted' : ''} ${isFiltered ? 'is-filtered' : ''}">
+                      <div class="th-inner">
+                        <span class="th-label" data-sort-cat="${cat}" data-sort-key="${escapeHtml(col)}" title="Klik untuk susun">${escapeHtml(col)}</span>
+                        <span class="th-sort-ind">${arrow}</span>
+                        <button type="button" class="th-filter-btn" data-filter-cat="${cat}" data-filter-key="${escapeHtml(col)}" title="Susun & Tapis (gaya Excel)">${icon}</button>
+                      </div>
+                    </th>`;
                   }).join('')}
                 </tr>
               </thead>
@@ -1537,7 +1590,7 @@
             </table>
           </div>
           <div class="pagination-bar">
-            <span>Memaparkan <strong>${start + 1}–${Math.min(start + ts.pageSize, total)}</strong> daripada <strong>${total}</strong> rekod (${activeCols.length} kolum dipilih)</span>
+            <span>Memaparkan <strong>${start + 1}–${Math.min(start + ts.pageSize, total)}</strong> daripada <strong>${total}</strong> rekod${total !== allRows.length ? ` (ditapis daripada ${allRows.length})` : ''} • ${activeCols.length} kolum</span>
             <div style="display:flex; gap:6px; align-items:center;">
               <select class="select-3d" data-pagesize="${cat}" style="width:auto; padding:6px 10px; font-size:0.8rem;">
                 ${[25, 50, 100, 500].map(sz => `<option value="${sz}" ${ts.pageSize === sz ? 'selected' : ''}>${sz} / halaman</option>`).join('')}
@@ -1562,6 +1615,7 @@
             </div>
             <div class="section-tools">
               <input type="text" class="input-3d mini-search" data-search="${cat}" value="${escapeHtml(ts.search)}" placeholder="Tapis dalam ${meta.label.toLowerCase()}..." />
+              ${(activeFilterCount || ts.sortKey) ? `<button class="btn-3d btn-white btn-sm" data-clear-filters="${cat}">✕ Kosongkan Susun/Tapis${activeFilterCount ? ` (${activeFilterCount})` : ''}</button>` : ''}
               <button class="btn-3d btn-white btn-sm" data-open-cols="${cat}">⚙️ Pilih Kolum (${activeCols.length})</button>
             </div>
           </div>
@@ -1618,17 +1672,219 @@
         }
       });
 
-      document.querySelectorAll('[data-sort-cat]').forEach(th => {
-        th.addEventListener('click', () => {
-          const cat = th.dataset.sortCat;
-          const idx = Number(th.dataset.sortIdx);
+      document.querySelectorAll('[data-sort-cat]').forEach(el => {
+        el.addEventListener('click', () => {
+          const cat = el.dataset.sortCat;
+          const key = el.dataset.sortKey;
           const ts = state.tableState[cat];
-          if (ts.sortCol === idx) ts.sortAsc = !ts.sortAsc;
-          else { ts.sortCol = idx; ts.sortAsc = true; }
+          // Kitaran: A→Z, Z→A, tiada susunan
+          if (ts.sortKey !== key) { ts.sortKey = key; ts.sortAsc = true; }
+          else if (ts.sortAsc) { ts.sortAsc = false; }
+          else { ts.sortKey = null; ts.sortAsc = true; }
+          renderTables();
+        });
+      });
+
+      document.querySelectorAll('[data-filter-cat]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const cat = btn.dataset.filterCat;
+          const key = btn.dataset.filterKey;
+          if (filterMenu.classList.contains('open') && filterMenu.dataset.cat === cat && filterMenu.dataset.key === key) {
+            closeFilterMenu();
+          } else {
+            openFilterMenu(cat, key, btn);
+          }
+        });
+      });
+
+      document.querySelectorAll('[data-clear-filters]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const ts = state.tableState[btn.dataset.clearFilters];
+          ts.filters = {};
+          ts.sortKey = null;
+          ts.sortAsc = true;
+          ts.search = '';
+          ts.page = 1;
           renderTables();
         });
       });
     }
+
+    /* ========================================================================
+     * SUSUN & TAPIS GAYA EXCEL
+     * ======================================================================== */
+    function parseSortable(v) {
+      const s = String(v ?? '').trim();
+      if (s === '') return { t: 3, v: '' };
+      const num = s.replace(/,/g, '');
+      if (/^[-+]?\d*\.?\d+(e[-+]?\d+)?%?$/i.test(num)) {
+        return { t: 0, v: parseFloat(num) };
+      }
+      let m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})(?:\s+(\d{1,2}):(\d{2}))?/);
+      if (m) return { t: 1, v: new Date(+m[3], +m[2] - 1, +m[1], +(m[4] || 0), +(m[5] || 0)).getTime() };
+      m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+      if (m) return { t: 1, v: new Date(+m[1], +m[2] - 1, +m[3]).getTime() };
+      return { t: 2, v: s };
+    }
+
+    // Seperti Excel: nombor/tarikh dahulu, kemudian teks; sel kosong sentiasa di bawah
+    function excelCompare(a, b, asc = true) {
+      const pa = parseSortable(a), pb = parseSortable(b);
+      if (pa.t === 3 || pb.t === 3) return pa.t === pb.t ? 0 : (pa.t === 3 ? 1 : -1);
+      const ra = pa.t === 2 ? 1 : 0, rb = pb.t === 2 ? 1 : 0;
+      let r;
+      if (ra !== rb) r = ra - rb;
+      else if (ra === 0) r = pa.v - pb.v;
+      else r = pa.v.localeCompare(pb.v, 'ms', { numeric: true, sensitivity: 'base' });
+      return asc ? r : -r;
+    }
+
+    function applyColumnFilters(cat, rows, headers, exceptKey) {
+      const filters = state.tableState[cat].filters || {};
+      const active = Object.keys(filters)
+        .filter(k => k !== exceptKey && headers.includes(k))
+        .map(k => ({ idx: headers.indexOf(k), set: filters[k] }));
+      if (!active.length) return rows;
+      return rows.filter(r => active.every(f => f.set.has(String(r[f.idx] ?? '').trim())));
+    }
+
+    const filterMenu = document.createElement('div');
+    filterMenu.className = 'filter-menu';
+    filterMenu.id = 'colFilterMenu';
+    document.body.appendChild(filterMenu);
+
+    function closeFilterMenu() {
+      filterMenu.classList.remove('open');
+      filterMenu.dataset.cat = '';
+      filterMenu.dataset.key = '';
+    }
+
+    function openFilterMenu(cat, key, anchorEl) {
+      const ds = state.currentSchool?.data[cat];
+      if (!ds) return;
+      const headers = ds.headers || [];
+      const idx = headers.indexOf(key);
+      if (idx === -1) return;
+      const ts = state.tableState[cat];
+
+      // Senarai nilai mengambil kira tapisan kolum lain (sama seperti Excel)
+      const baseRows = applyColumnFilters(cat, ds.rows || [], headers, key);
+      const counts = new Map();
+      baseRows.forEach(r => {
+        const v = String(r[idx] ?? '').trim();
+        counts.set(v, (counts.get(v) || 0) + 1);
+      });
+      const values = [...counts.keys()].sort((a, b) => excelCompare(a, b, true));
+      const current = ts.filters[key];
+
+      filterMenu.dataset.cat = cat;
+      filterMenu.dataset.key = key;
+      filterMenu.innerHTML = `
+        <div class="fm-title" title="${escapeHtml(key)}">${escapeHtml(key)}</div>
+        <button type="button" class="fm-item ${ts.sortKey === key && ts.sortAsc ? 'active' : ''}" data-fm-sort="asc">↑ Susun A → Z / Kecil → Besar</button>
+        <button type="button" class="fm-item ${ts.sortKey === key && !ts.sortAsc ? 'active' : ''}" data-fm-sort="desc">↓ Susun Z → A / Besar → Kecil</button>
+        ${ts.sortKey === key ? '<button type="button" class="fm-item" data-fm-sort="none">✕ Buang Susunan</button>' : ''}
+        <div class="fm-sep"></div>
+        ${current ? '<button type="button" class="fm-item" data-fm-clear="1">⧩ Kosongkan Tapisan Kolum Ini</button>' : ''}
+        <input type="text" class="fm-search" placeholder="Cari nilai..." />
+        <div class="fm-list">
+          <label class="fm-check"><input type="checkbox" data-fm-all="1" /> <span class="v"><strong>(Pilih Semua)</strong></span></label>
+          ${values.map((v, i) => `
+            <label class="fm-check" data-fm-row="${escapeHtml(v.toUpperCase())}">
+              <input type="checkbox" data-fm-val="${i}" ${!current || current.has(v) ? 'checked' : ''} />
+              <span class="v" title="${escapeHtml(v)}">${v === '' ? '<em>(Kosong)</em>' : escapeHtml(v)}</span>
+              <span class="c">${counts.get(v)}</span>
+            </label>`).join('')}
+        </div>
+        <div class="fm-actions">
+          <button type="button" class="btn-3d btn-white btn-sm" data-fm-cancel="1">Batal</button>
+          <button type="button" class="btn-3d btn-primary btn-sm" data-fm-ok="1">OK</button>
+        </div>
+      `;
+
+      const valBoxes = () => [...filterMenu.querySelectorAll('[data-fm-val]')];
+      const allBox = filterMenu.querySelector('[data-fm-all]');
+      const syncAll = () => {
+        const vis = valBoxes().filter(cb => cb.closest('.fm-check').style.display !== 'none');
+        const n = vis.filter(cb => cb.checked).length;
+        allBox.checked = vis.length > 0 && n === vis.length;
+        allBox.indeterminate = n > 0 && n < vis.length;
+      };
+      syncAll();
+
+      allBox.addEventListener('change', () => {
+        valBoxes().forEach(cb => {
+          if (cb.closest('.fm-check').style.display !== 'none') cb.checked = allBox.checked;
+        });
+        syncAll();
+      });
+      valBoxes().forEach(cb => cb.addEventListener('change', syncAll));
+
+      filterMenu.querySelector('.fm-search').addEventListener('input', (e) => {
+        const q = e.target.value.trim().toUpperCase();
+        filterMenu.querySelectorAll('[data-fm-row]').forEach(row => {
+          row.style.display = row.dataset.fmRow.includes(q) ? 'flex' : 'none';
+        });
+        // Seperti Excel: bila mencari, hanya nilai yang sepadan dipilih
+        if (q) valBoxes().forEach(cb => { cb.checked = cb.closest('.fm-check').style.display !== 'none'; });
+        syncAll();
+      });
+
+      filterMenu.querySelectorAll('[data-fm-sort]').forEach(b => b.addEventListener('click', () => {
+        const dir = b.dataset.fmSort;
+        if (dir === 'none') { ts.sortKey = null; ts.sortAsc = true; }
+        else { ts.sortKey = key; ts.sortAsc = dir === 'asc'; }
+        ts.page = 1;
+        closeFilterMenu();
+        renderTables();
+      }));
+
+      const clearBtn = filterMenu.querySelector('[data-fm-clear]');
+      if (clearBtn) clearBtn.addEventListener('click', () => {
+        delete ts.filters[key];
+        ts.page = 1;
+        closeFilterMenu();
+        renderTables();
+      });
+
+      filterMenu.querySelector('[data-fm-cancel]').addEventListener('click', closeFilterMenu);
+      filterMenu.querySelector('[data-fm-ok]').addEventListener('click', () => {
+        const chosen = valBoxes().filter(cb => cb.checked).map(cb => values[Number(cb.dataset.fmVal)]);
+        if (!chosen.length) {
+          showToast('Sila pilih sekurang-kurangnya satu nilai.', true);
+          return;
+        }
+        if (chosen.length === values.length) delete ts.filters[key];
+        else ts.filters[key] = new Set(chosen);
+        ts.page = 1;
+        closeFilterMenu();
+        renderTables();
+      });
+
+      filterMenu.classList.add('open');
+      const rect = anchorEl.getBoundingClientRect();
+      const mw = filterMenu.offsetWidth, mh = filterMenu.offsetHeight;
+      let left = Math.min(rect.right - mw, window.innerWidth - mw - 8);
+      left = Math.max(8, left);
+      let top = rect.bottom + 6;
+      if (top + mh > window.innerHeight - 8) top = Math.max(8, rect.top - mh - 6);
+      filterMenu.style.left = left + 'px';
+      filterMenu.style.top = top + 'px';
+      const searchEl = filterMenu.querySelector('.fm-search');
+      if (searchEl) searchEl.focus({ preventScroll: true });
+    }
+
+    document.addEventListener('click', (e) => {
+      if (filterMenu.classList.contains('open') && !filterMenu.contains(e.target) && !e.target.closest('.th-filter-btn')) {
+        closeFilterMenu();
+      }
+    });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeFilterMenu(); });
+    document.addEventListener('scroll', (e) => {
+      if (filterMenu.classList.contains('open') && !filterMenu.contains(e.target)) closeFilterMenu();
+    }, true);
+    window.addEventListener('resize', closeFilterMenu);
 
     /* ========================================================================
      * MODAL PEMILIH KOLUM DINAMIK
@@ -1692,7 +1948,9 @@
 
       state.selectedCols[cat] = checked;
       localStorage.setItem('ds_cols_' + cat, JSON.stringify(checked));
-      state.tableState[cat].sortCol = -1;
+      const tsC = state.tableState[cat];
+      if (tsC.sortKey && !checked.includes(tsC.sortKey)) tsC.sortKey = null;
+      Object.keys(tsC.filters || {}).forEach(k => { if (!checked.includes(k)) delete tsC.filters[k]; });
       document.getElementById('colModal').classList.remove('open');
       renderTables();
       showToast(`Pilihan ${checked.length} kolum untuk ${CAT_META[cat].label} disimpan.`);
