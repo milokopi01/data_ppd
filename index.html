@@ -2,7 +2,7 @@
 <html lang="ms">
 <head>
   <meta charset="UTF-8" />
-  <script>window.GAS_URL = 'https://script.google.com/macros/s/AKfycbx0fwKVOjuRXYRArxw7fAZ7PoNZhZE5cRo5cKlL8OXxpt87kavxTswc5zOt-uABLwniaA/exec'; /* URL Web App Google Apps Script (KEKAL untuk semua pengguna) */</script>
+  <script>window.GAS_URL = 'https://script.google.com/macros/s/AKfycbxQ-iDz0432i1j4DZ6sBADjJcg0ca-z3-nO34aMsgEpG6Deio5gqZ0o4xbY5LU3mRrhvw/exec'; /* URL Web App Google Apps Script (KEKAL untuk semua pengguna) */</script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#ffffff" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -14,6 +14,9 @@
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <!-- Pustaka SheetJS untuk baca & eksport fail Excel (.xlsx / .csv) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <!-- Pustaka jsPDF + AutoTable untuk simpan senarai carian sebagai PDF -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 
   <style>
     :root {
@@ -380,6 +383,24 @@
     .adv-res-card table { width: 100%; font-size: 0.85rem; margin-top: 8px; border-collapse: collapse; }
     .adv-res-card td { padding: 3px 0; border-top: 1px solid var(--border, #eef2f7); }
     .adv-res-card td:last-child { text-align: right; font-weight: 700; }
+    .adv-res-card .adv-list-btn { margin-top: 10px; width: 100%; }
+    /* ===== Senarai rekod Carian Meluas ===== */
+    .adv-list { margin-top: 16px; border: 1px solid var(--border-light); border-radius: 14px; padding: 14px; background: #ffffff; }
+    .adv-list-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+    .adv-list-title { font-size: 1rem; font-weight: 800; }
+    .adv-list-sub { font-size: 0.8rem; color: var(--text-muted); }
+    .adv-list-tools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    .adv-list-tools .select-3d { width: auto; padding: 6px 10px; font-size: 0.8rem; }
+    .adv-warn { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; border-radius: 10px; padding: 8px 12px; font-size: 0.82rem; margin-bottom: 10px; }
+    .adv-cols { position: relative; }
+    .adv-cols > summary { list-style: none; cursor: pointer; }
+    .adv-cols > summary::-webkit-details-marker { display: none; }
+    .adv-cols-panel { position: absolute; right: 0; top: calc(100% + 6px); z-index: 50; width: 320px; max-width: 86vw; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 12px; box-shadow: 0 18px 40px rgba(15,23,42,.18); padding: 10px; }
+    .adv-cols-list { max-height: 260px; overflow-y: auto; border: 1px solid var(--border-light); border-radius: 8px; padding: 4px; margin: 6px 0; }
+    .adv-cols-list label { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 5px; cursor: pointer; font-size: 0.82rem; }
+    .adv-cols-list label:hover { background: #f1f5f9; }
+    .adv-list table.data-table { min-width: 0; }
+    .adv-list .th-label { white-space: nowrap; }
     .field-label {
       display: block;
       font-size: 0.8rem;
@@ -2241,6 +2262,238 @@
         }));
       }
       window.renderAdvPanel = renderAdv;
+
+      /* ---------- SENARAI REKOD: jadual biasa + susun + cetak + Excel + PDF ---------- */
+      let lastRun = null;
+      let list = null; // { cat, headers, rows, count, total, truncated, sortIdx, asc, page, pageSize }
+      adv.listCols = adv.listCols || {};
+      adv.listLimit = adv.listLimit || 5000;
+      const collator = new Intl.Collator('ms', { numeric: true, sensitivity: 'base' });
+      const fmtN = n => Number(n).toLocaleString('ms-MY');
+      const todayStr = () => new Date().toISOString().slice(0, 10);
+
+      function defaultListCols(cat) {
+        const heads = state.metadata.headers[cat] || [];
+        const pick = [];
+        const add = c => { if (c && heads.includes(c) && !pick.includes(c)) pick.push(c); };
+        heads.filter(h => /^KOD_?SEKOLAH$/i.test(h) || /^NAMA_?SEKOLAH$/i.test(h) || /^NEGERI$/i.test(h) || /^PPD$/i.test(h)).forEach(add);
+        ((state.selectedCols[cat] && state.selectedCols[cat].length) ? state.selectedCols[cat] : DEFAULT_COLS[cat]).forEach(add);
+        (lastRun ? lastRun.conds : []).forEach(c => add(c.col));
+        return pick.length ? pick : heads.slice(0, 10);
+      }
+      function listColsFor(cat) {
+        const heads = state.metadata.headers[cat] || [];
+        const saved = (adv.listCols[cat] || []).filter(c => heads.includes(c));
+        return saved.length ? saved : defaultListCols(cat);
+      }
+
+      async function loadList(cat) {
+        if (!lastRun) return;
+        const box = document.getElementById('advList');
+        if (!box) return;
+        box.innerHTML = `<div class="adv-list"><div style="color:#64748b;">⏳ Mengambil senarai ${CAT_META[cat].label.replace('Senarai ', '')}... (data besar boleh ambil masa 10–30 saat)</div></div>`;
+        box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        try {
+          const res = await callGAS({ action: 'queryRows', category: cat, conditions: lastRun.conds, columns: listColsFor(cat), limit: adv.listLimit });
+          list = { cat, headers: res.headers || [], rows: res.rows || [], count: res.count || 0, total: res.total || 0, truncated: !!res.truncated, sortIdx: -1, asc: true, page: 1, pageSize: (list && list.pageSize) || 100 };
+          renderList();
+        } catch (err) {
+          const msg = err.message || String(err);
+          const hint = /Tindakan tidak dikenali/i.test(msg) ? '<br><small>Sila kemas kini code.gs dan buat <b>Deploy → Manage deployments → Edit → New version</b>.</small>' : '';
+          box.innerHTML = `<div class="adv-list" style="color:#dc2626;">Gagal ambil senarai: ${escapeHtml(msg)}${hint}</div>`;
+        }
+      }
+
+      function sortedRows() {
+        if (!list) return [];
+        if (list.sortIdx < 0) return list.rows;
+        const i = list.sortIdx, dir = list.asc ? 1 : -1;
+        return list.rows.slice().sort((a, b) => {
+          const x = String(a[i] ?? '').trim(), y = String(b[i] ?? '').trim();
+          if (!x && y) return 1;
+          if (x && !y) return -1;
+          return collator.compare(x, y) * dir;
+        });
+      }
+
+      function renderList() {
+        const box = document.getElementById('advList');
+        if (!box || !list) return;
+        const meta = CAT_META[list.cat];
+        const rows = sortedRows();
+        const all = list.pageSize === 0;
+        const pages = all ? 1 : Math.max(1, Math.ceil(rows.length / list.pageSize));
+        list.page = Math.min(Math.max(1, list.page), pages);
+        const start = all ? 0 : (list.page - 1) * list.pageSize;
+        const pageRows = all ? rows : rows.slice(start, start + list.pageSize);
+        const heads = state.metadata.headers[list.cat] || list.headers;
+        const chosen = new Set(list.headers);
+        box.innerHTML = `
+          <div class="adv-list" style="border-top:4px solid ${meta.color}">
+            <div class="adv-list-head">
+              <div>
+                <div class="adv-list-title">${meta.label} — ${fmtN(list.count)} rekod</div>
+                <div class="adv-list-sub">Syarat: ${escapeHtml(lastRun ? lastRun.desc : '')}${list.sortIdx >= 0 ? ` • Disusun ikut ${escapeHtml(list.headers[list.sortIdx])} (${list.asc ? 'A→Z' : 'Z→A'})` : ' • Klik tajuk kolum untuk susun'}</div>
+              </div>
+              <div class="adv-list-tools">
+                <details class="adv-cols">
+                  <summary class="btn-3d btn-white btn-sm">⚙️ Kolum (${list.headers.length})</summary>
+                  <div class="adv-cols-panel">
+                    <input type="text" class="input-3d" data-advcol-filter placeholder="Cari kolum..." style="padding:7px 10px;font-size:.82rem;">
+                    <div class="adv-cols-list">
+                      ${heads.map(h => `<label data-advcol-label="${escapeHtml(h.toUpperCase())}"><input type="checkbox" value="${escapeHtml(h)}" ${chosen.has(h) ? 'checked' : ''}> ${escapeHtml(h)}</label>`).join('')}
+                    </div>
+                    <div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;">
+                      <button type="button" class="btn-3d btn-white btn-sm" data-advcol-default>Lalai</button>
+                      <button type="button" class="btn-3d btn-primary btn-sm" data-advcol-apply>✓ Guna</button>
+                    </div>
+                  </div>
+                </details>
+                <select class="select-3d" data-adv-limit title="Had rekod diambil">
+                  ${[1000, 5000, 20000, 60000].map(n => `<option value="${n}" ${adv.listLimit === n ? 'selected' : ''}>Had ${fmtN(n)} rekod</option>`).join('')}
+                </select>
+                <button type="button" class="btn-3d btn-white btn-sm" data-adv-print>🖨️ Cetak</button>
+                <button type="button" class="btn-3d btn-emerald btn-sm" data-adv-xlsx>📥 Excel</button>
+                <button type="button" class="btn-3d btn-white btn-sm" data-adv-pdf>📄 PDF</button>
+                <button type="button" class="btn-3d btn-white btn-sm" data-adv-close title="Tutup senarai">✕</button>
+              </div>
+            </div>
+            ${list.truncated ? `<div class="adv-warn">⚠️ Hanya <b>${fmtN(list.rows.length)}</b> daripada <b>${fmtN(list.count)}</b> rekod diambil. Tambah syarat carian atau naikkan had rekod untuk lihat semua.</div>` : ''}
+            ${!rows.length ? '<div class="empty-state" style="padding:22px;">Tiada rekod.</div>' : `
+            <div class="table-wrapper" style="max-height:640px;overflow:auto;">
+              <table class="data-table">
+                <thead><tr>
+                  <th style="width:52px;">Bil</th>
+                  ${list.headers.map((h, i) => `<th data-adv-sort="${i}" title="Klik untuk susun">${escapeHtml(h)} <span class="th-sort-ind">${list.sortIdx === i ? (list.asc ? '▲' : '▼') : ''}</span></th>`).join('')}
+                </tr></thead>
+                <tbody>
+                  ${pageRows.map((r, k) => `<tr><td style="font-weight:700;color:var(--text-muted);">${start + k + 1}</td>${list.headers.map((_, i) => `<td>${escapeHtml(r[i] === '' || r[i] == null ? '-' : r[i])}</td>`).join('')}</tr>`).join('')}
+                </tbody>
+              </table>
+            </div>
+            <div class="pagination-bar">
+              <span>Memaparkan <strong>${fmtN(start + 1)}–${fmtN(start + pageRows.length)}</strong> daripada <strong>${fmtN(rows.length)}</strong> rekod • ${list.headers.length} kolum</span>
+              <div style="display:flex;gap:6px;align-items:center;">
+                <select class="select-3d" data-adv-pagesize style="width:auto;padding:6px 10px;font-size:.8rem;">
+                  ${[50, 100, 500, 1000, 0].map(n => `<option value="${n}" ${list.pageSize === n ? 'selected' : ''}>${n ? n + ' / halaman' : 'Semua'}</option>`).join('')}
+                </select>
+                <button type="button" class="btn-3d btn-white btn-sm" data-adv-prev ${list.page <= 1 ? 'disabled' : ''}>◀</button>
+                <span style="font-weight:700;">${list.page} / ${pages}</span>
+                <button type="button" class="btn-3d btn-white btn-sm" data-adv-next ${list.page >= pages ? 'disabled' : ''}>▶</button>
+              </div>
+            </div>`}
+          </div>`;
+
+        const q = sel => box.querySelector(sel);
+        box.querySelectorAll('[data-adv-sort]').forEach(th => th.addEventListener('click', () => {
+          const i = +th.dataset.advSort;
+          if (list.sortIdx === i) { if (list.asc) list.asc = false; else { list.sortIdx = -1; list.asc = true; } }
+          else { list.sortIdx = i; list.asc = true; }
+          list.page = 1; renderList();
+        }));
+        q('[data-adv-pagesize]') && q('[data-adv-pagesize]').addEventListener('change', e => { list.pageSize = +e.target.value; list.page = 1; renderList(); });
+        q('[data-adv-prev]') && q('[data-adv-prev]').addEventListener('click', () => { list.page--; renderList(); });
+        q('[data-adv-next]') && q('[data-adv-next]').addEventListener('click', () => { list.page++; renderList(); });
+        q('[data-adv-close]').addEventListener('click', () => { list = null; box.innerHTML = ''; });
+        q('[data-adv-limit]').addEventListener('change', e => { adv.listLimit = +e.target.value; save(); loadList(list.cat); });
+        q('[data-adv-print]').addEventListener('click', printList);
+        q('[data-adv-xlsx]').addEventListener('click', exportListXlsx);
+        q('[data-adv-pdf]').addEventListener('click', exportListPdf);
+        q('[data-advcol-filter]').addEventListener('input', e => {
+          const v = e.target.value.trim().toUpperCase();
+          box.querySelectorAll('[data-advcol-label]').forEach(l => { l.style.display = l.dataset.advcolLabel.includes(v) ? '' : 'none'; });
+        });
+        q('[data-advcol-default]').addEventListener('click', () => { delete adv.listCols[list.cat]; save(); loadList(list.cat); });
+        q('[data-advcol-apply]').addEventListener('click', () => {
+          const picked = [...box.querySelectorAll('.adv-cols-list input:checked')].map(x => x.value);
+          if (!picked.length) { showToast('Sila pilih sekurang-kurangnya satu kolum.', true); return; }
+          adv.listCols[list.cat] = picked; save(); loadList(list.cat);
+        });
+      }
+
+      function listTitle() { return `${CAT_META[list.cat].label} — Carian Meluas`; }
+      function listFileBase() { return `Carian_${list.cat}_${todayStr()}`; }
+      function listAoa() {
+        return [['BIL', ...list.headers], ...sortedRows().map((r, k) => [k + 1, ...list.headers.map((_, i) => r[i] ?? '')])];
+      }
+
+      function printList() {
+        if (!list) return;
+        const w = window.open('', '_blank');
+        if (!w) { showToast('Tetingkap cetak disekat. Benarkan pop-up untuk laman ini.', true); return; }
+        const aoa = listAoa();
+        const html = `<!DOCTYPE html><html lang="ms"><head><meta charset="UTF-8"><title>${escapeHtml(listFileBase())}</title>
+          <style>
+            @page { size: A4 landscape; margin: 10mm; }
+            * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+            body { font-family: Arial, Helvetica, sans-serif; color: #0f172a; margin: 0; padding: 12px; }
+            h1 { font-size: 15pt; margin: 0 0 4px; }
+            .sub { font-size: 9pt; color: #475569; margin-bottom: 10px; }
+            table { width: 100%; border-collapse: collapse; font-size: 8pt; }
+            th, td { border: 1px solid #94a3b8; padding: 3px 5px; text-align: left; vertical-align: top; }
+            th { background: #e2e8f0; font-weight: 700; }
+            thead { display: table-header-group; }
+            tr { break-inside: avoid; }
+          </style></head><body>
+          <h1>${escapeHtml(listTitle())}</h1>
+          <div class="sub">Syarat: ${escapeHtml(lastRun ? lastRun.desc : '')} • ${fmtN(list.rows.length)}${list.truncated ? ' daripada ' + fmtN(list.count) : ''} rekod • Dicetak: ${new Date().toLocaleString('ms-MY')}</div>
+          <table><thead><tr>${aoa[0].map(h => `<th>${escapeHtml(h)}</th>`).join('')}</tr></thead>
+          <tbody>${aoa.slice(1).map(r => `<tr>${r.map(v => `<td>${escapeHtml(v)}</td>`).join('')}</tr>`).join('')}</tbody></table>
+          <script>window.onload = function () { setTimeout(function () { window.print(); }, 200); };<\/script>
+          </body></html>`;
+        w.document.open(); w.document.write(html); w.document.close();
+      }
+
+      function exportListXlsx() {
+        if (!list) return;
+        if (typeof XLSX === 'undefined') { showToast('Pustaka Excel belum dimuatkan. Semak sambungan internet.', true); return; }
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.aoa_to_sheet(listAoa());
+        ws['!cols'] = [{ wch: 6 }, ...list.headers.map(h => ({ wch: Math.min(40, Math.max(10, h.length + 2)) }))];
+        XLSX.utils.book_append_sheet(wb, ws, list.cat);
+        const info = XLSX.utils.aoa_to_sheet([
+          ['Laporan', listTitle()],
+          ['Syarat', lastRun ? lastRun.desc : ''],
+          ['Jumlah sepadan', list.count],
+          ['Rekod dalam fail', list.rows.length],
+          ['Susunan', list.sortIdx >= 0 ? `${list.headers[list.sortIdx]} (${list.asc ? 'A→Z' : 'Z→A'})` : 'Asal'],
+          ['Tarikh', new Date().toLocaleString('ms-MY')]
+        ]);
+        info['!cols'] = [{ wch: 18 }, { wch: 70 }];
+        XLSX.utils.book_append_sheet(wb, info, 'MAKLUMAT');
+        XLSX.writeFile(wb, listFileBase() + '.xlsx');
+        showToast(`Fail ${listFileBase()}.xlsx berjaya dimuat turun.`);
+      }
+
+      function exportListPdf() {
+        if (!list) return;
+        const JsPDF = window.jspdf && window.jspdf.jsPDF;
+        if (!JsPDF) { showToast('Pustaka PDF belum dimuatkan. Semak sambungan internet.', true); return; }
+        const aoa = listAoa();
+        if (aoa.length > 8001 && !confirm(`Senarai ini ada ${fmtN(aoa.length - 1)} rekod. PDF besar boleh ambil masa lama. Teruskan?`)) return;
+        const doc = new JsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+        const nCols = aoa[0].length;
+        const fs = nCols > 14 ? 5.5 : nCols > 10 ? 6.5 : 7.5;
+        doc.setFontSize(13); doc.text(listTitle(), 10, 12);
+        doc.setFontSize(8); doc.setTextColor(71, 85, 105);
+        const sub = `Syarat: ${lastRun ? lastRun.desc : ''}  |  ${fmtN(list.rows.length)}${list.truncated ? ' daripada ' + fmtN(list.count) : ''} rekod  |  ${new Date().toLocaleString('ms-MY')}`;
+        doc.text(doc.splitTextToSize(sub, 277), 10, 17);
+        doc.autoTable({
+          head: [aoa[0]],
+          body: aoa.slice(1).map(r => r.map(v => String(v ?? ''))),
+          startY: 22,
+          margin: { left: 10, right: 10, top: 10, bottom: 12 },
+          styles: { fontSize: fs, cellPadding: 1.2, overflow: 'linebreak', lineColor: [203, 213, 225], lineWidth: 0.1 },
+          headStyles: { fillColor: [29, 78, 216], textColor: 255, fontStyle: 'bold' },
+          alternateRowStyles: { fillColor: [248, 250, 252] },
+          didDrawPage: d => {
+            doc.setFontSize(7); doc.setTextColor(148, 163, 184);
+            doc.text(`Muka ${doc.internal.getNumberOfPages()}`, 287, 205, { align: 'right' });
+          }
+        });
+        doc.save(listFileBase() + '.pdf');
+        showToast(`Fail ${listFileBase()}.pdf berjaya dimuat turun.`);
+      }
       document.querySelectorAll('[data-adv-cat]').forEach(cb => cb.addEventListener('change', () => {
         adv.cats = [...document.querySelectorAll('[data-adv-cat]:checked')].map(x => x.dataset.advCat);
         save(); renderAdv();
@@ -2270,8 +2523,11 @@
                 <div style="font-size:.8rem;color:#64748b;">daripada ${fmt(r.total)} rekod</div>
                 ${groups.length ? `<table>${groups.map(([k, v]) => `<tr><td>${escapeHtml(k)}</td><td>${fmt(v)}</td></tr>`).join('')}</table>` : ''}
                 ${(r.missing || []).length ? `<div style="color:#d97706;font-size:.8rem;margin-top:6px;">Kolum pecahan tiada: ${escapeHtml(r.missing.join(', '))}</div>` : ''}
+                ${r.count > 0 ? `<button type="button" class="btn-3d btn-white btn-sm adv-list-btn" data-adv-list="${cat}">📋 Papar Senarai (${fmt(r.count)})</button>` : ''}
               </div>`;
-            }).join('') + '</div>';
+            }).join('') + '</div><div id="advList"></div>';
+          lastRun = { conds: conds.map(c => ({ ...c })), desc: conds.length ? conds.map(c => `${c.col} ${c.mode === 'equals' ? '=' : c.mode === 'notempty' ? 'tidak kosong' : 'mengandungi'}${c.mode === 'notempty' ? '' : ' "' + c.value + '"'}`).join(' DAN ') : 'Semua rekod' };
+          out.querySelectorAll('[data-adv-list]').forEach(b => b.addEventListener('click', () => loadList(b.dataset.advList)));
         } catch (err) {
           out.innerHTML = `<div style="color:#dc2626;">Gagal: ${escapeHtml(err.message || String(err))}</div>`;
         } finally { btn.disabled = false; }
