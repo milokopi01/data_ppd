@@ -2,7 +2,7 @@
 <html lang="ms">
 <head>
   <meta charset="UTF-8" />
-  <script>window.GAS_URL = 'https://script.google.com/macros/s/AKfycbx5d4_dVCYzwcrFEptSBub6iHEVzUkZgYQwzmnayAARO4Vxel2XVLRk2vPuSu4wfQ7ktw/exec'; /* URL Web App Google Apps Script (KEKAL untuk semua pengguna) */</script>
+  <script>window.GAS_URL = 'https://script.google.com/macros/s/AKfycbyNXOOVNGYTIrB6HHuLOSKUBR-K8C62eLm_-FxiRx_xFXiHcfscdKcoduiHMVPJktU1oA/exec'; /* URL Web App Google Apps Script (KEKAL untuk semua pengguna) */</script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#ffffff" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -1100,7 +1100,9 @@
       <div class="card-3d" style="padding:24px; max-width:760px;">
         <h3 style="font-size:1.1rem; font-weight:800; margin-bottom:6px;">Tetapan</h3>
         <p style="font-size:0.86rem; color:var(--text-sub); margin-bottom:16px;">
-          Sambungan ke Google Sheet telah ditetapkan secara kekal. Semua pengguna pautan ini melihat data yang sama.
+          Sambungan ke Google Sheet ditetapkan secara kekal dan <strong>bersambung secara automatik</strong> setiap kali aplikasi dibuka.
+          Data disegarkan sendiri di latar belakang setiap 5 minit, dan sistem akan cuba menyambung semula dengan sendiri jika talian terputus.
+          Butang di bawah hanya untuk segar data serta-merta (tidak wajib).
         </p>
 
         <div style="display:flex; flex-wrap:wrap; gap:10px; margin-bottom:22px;">
@@ -1111,7 +1113,7 @@
         <div style="background:var(--bg-soft); border:1px solid var(--border-light); border-radius:14px; padding:16px;">
           <h4 style="font-size:0.9rem; font-weight:800; margin-bottom:8px;">Ringkasan Pangkalan Data Semasa</h4>
           <div id="dbSummaryText" style="font-size:0.85rem; color:var(--text-sub); line-height:1.8;">
-            Belum disambungkan ke Google Sheet.
+            Sedang menyambung ke Google Sheet secara automatik...
           </div>
         </div>
       </div>
@@ -1217,7 +1219,26 @@
         .replace(/"/g, '&quot;');
     }
 
+    // Tindakan baca sahaja boleh dicuba semula secara automatik (muat naik TIDAK, elak data berganda)
+    const RETRYABLE_ACTIONS = ['getMetadata', 'getSchoolData', 'verifyPin'];
+
     async function callGAS(payload) {
+      const tries = RETRYABLE_ACTIONS.includes(payload.action) ? 3 : 1;
+      let lastErr;
+      for (let i = 0; i < tries; i++) {
+        try {
+          return await callGASOnce(payload);
+        } catch (err) {
+          lastErr = err;
+          // Ralat logik dari pelayan (cth. kata laluan salah) tidak perlu dicuba semula
+          if (err && err.fromServer) break;
+          if (i < tries - 1) await new Promise(r => setTimeout(r, 2000 * (i + 1)));
+        }
+      }
+      throw lastErr;
+    }
+
+    async function callGASOnce(payload) {
       if (!state.gasUrl || !state.gasUrl.startsWith('http')) {
         throw new Error('URL Google Apps Script belum ditetapkan pada baris ke-5 fail index.html.');
       }
@@ -1236,7 +1257,11 @@
         const extra = data && (data.error || data.message) ? ' (Respon: ' + (data.error || data.message) + ')' : '';
         throw new Error('URL Apps Script ini BUKAN API Dashboard Data Sekolah' + extra + '. Sila deploy code.gs dalam projek Apps Script yang berasingan.');
       }
-      if (data.status === 'error') throw new Error(data.message || 'Ralat pelayan.');
+      if (data.status === 'error') {
+        const e = new Error(data.message || 'Ralat pelayan.');
+        e.fromServer = true;
+        throw e;
+      }
       return data;
     }
 
@@ -1252,7 +1277,7 @@
         return;
       }
       err.textContent = '';
-      sessionStorage.setItem('ds_auth', '1');
+      localStorage.setItem('ds_auth', '1');
       document.getElementById('lockScreen').style.display = 'none';
       document.getElementById('appShell').style.display = 'block';
       initAfterUnlock();
@@ -1269,6 +1294,7 @@
     });
 
     document.getElementById('btnLock').addEventListener('click', () => {
+      localStorage.removeItem('ds_auth');
       sessionStorage.removeItem('ds_auth');
       document.getElementById('pinInput').value = '';
       document.getElementById('appShell').style.display = 'none';
@@ -1316,17 +1342,82 @@
       await loadMetadata(!!cached);
     }
 
+    /* ------------------------------------------------------------------
+     * SAMBUNGAN AUTOMATIK SEPANJANG MASA
+     * - Sambung sendiri bila aplikasi dibuka
+     * - Segar data di latar belakang setiap 5 minit
+     * - Cuba sambung semula sendiri jika gagal / talian terputus
+     * - Segar semula bila tab dibuka kembali atau internet kembali
+     * ------------------------------------------------------------------ */
+    const AUTO_REFRESH_MS = 5 * 60 * 1000;
+    const conn = { loading: null, lastOk: 0, retryTimer: null, retryDelay: 5000, refreshTimer: null, started: false };
+
+    function scheduleReconnect() {
+      clearTimeout(conn.retryTimer);
+      const wait = conn.retryDelay;
+      conn.retryDelay = Math.min(conn.retryDelay * 2, 60000);
+      let left = Math.round(wait / 1000);
+      const hasData = state.metadata.schools.length > 0;
+      const tick = () => {
+        if (left <= 0) { loadMetadata(true); return; }
+        setConnStatus(hasData, hasData
+          ? `${state.metadata.schools.length} Sekolah • sambung semula ${left}s`
+          : `Menyambung semula dalam ${left}s...`);
+        left--;
+        conn.retryTimer = setTimeout(tick, 1000);
+      };
+      tick();
+    }
+
+    function startAutoConnection() {
+      if (conn.started) return;
+      conn.started = true;
+      conn.refreshTimer = setInterval(() => {
+        if (document.visibilityState === 'visible' && navigator.onLine !== false) loadMetadata(true);
+      }, AUTO_REFRESH_MS);
+
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && Date.now() - conn.lastOk > 60000) loadMetadata(true);
+      });
+      window.addEventListener('online', () => {
+        conn.retryDelay = 5000;
+        loadMetadata(true);
+      });
+      window.addEventListener('offline', () => {
+        const hasData = state.metadata.schools.length > 0;
+        setConnStatus(false, hasData ? `${state.metadata.schools.length} Sekolah • Luar talian` : 'Luar talian');
+      });
+    }
+
     async function loadMetadata(silent = false) {
-      if (!silent) setConnStatus(false, 'Memuat indeks (±1 minit)...');
-      try {
-        const res = await callGAS({ action: 'getMetadata' });
-        applyMetadata(res);
-        try { localStorage.setItem(META_LS_KEY, JSON.stringify({ url: state.gasUrl, data: { headers: res.headers, counts: res.counts, schools: res.schools } })); } catch (e) {}
-        setConnStatus(true, `${state.metadata.schools.length} Sekolah`);
-      } catch (err) {
-        if (!silent) setConnStatus(false, 'Terputus');
-        showToast(err.message, true);
-      }
+      // Elak panggilan bertindih
+      if (conn.loading) return conn.loading;
+      clearTimeout(conn.retryTimer);
+      startAutoConnection();
+      const hasData = state.metadata.schools.length > 0;
+      if (!hasData) setConnStatus(false, 'Menyambung ke Google Sheet...');
+      else if (!silent) setConnStatus(true, `${state.metadata.schools.length} Sekolah • menyegar...`);
+
+      conn.loading = (async () => {
+        try {
+          const res = await callGAS({ action: 'getMetadata' });
+          applyMetadata(res);
+          try { localStorage.setItem(META_LS_KEY, JSON.stringify({ url: state.gasUrl, data: { headers: res.headers, counts: res.counts, schools: res.schools } })); } catch (e) {}
+          conn.lastOk = Date.now();
+          conn.retryDelay = 5000;
+          setConnStatus(true, `${state.metadata.schools.length} Sekolah`);
+          return true;
+        } catch (err) {
+          if (!silent) showToast(err.message, true);
+          // Jangan berhenti: cuba sambung semula secara automatik
+          if (!(err && err.fromServer)) scheduleReconnect();
+          else setConnStatus(false, 'Ralat pelayan');
+          return false;
+        } finally {
+          conn.loading = null;
+        }
+      })();
+      return conn.loading;
     }
 
     function applyMetadata(res) {
@@ -1422,8 +1513,8 @@
 
     document.getElementById('btnLoadSchool').addEventListener('click', loadSelectedSchool);
     document.getElementById('btnRefreshMeta').addEventListener('click', async () => {
-      await loadMetadata();
-      showToast('Indeks sekolah berjaya disegarkan.');
+      const ok = await loadMetadata();
+      if (ok) showToast('Indeks sekolah berjaya disegarkan.');
     });
 
     async function loadSelectedSchool() {
@@ -2119,8 +2210,10 @@
      * TETAPAN & SERVICE WORKER PWA
      * ======================================================================== */
     document.getElementById('btnTestConn').addEventListener('click', async () => {
-      showToast('Menguji sambungan...');
-      await loadMetadata();
+      showToast('Menyegar data...');
+      conn.retryDelay = 5000;
+      const ok = await loadMetadata();
+      if (ok) showToast('Sambungan aktif. Data terkini dimuatkan.');
     });
 
     document.getElementById('btnResetCols').addEventListener('click', () => {
@@ -2141,7 +2234,8 @@
 
     // Semak sesi log masuk semasa halaman dimuatkan
     window.addEventListener('DOMContentLoaded', () => {
-      if (sessionStorage.getItem('ds_auth') === '1') {
+      if (localStorage.getItem('ds_auth') === '1' || sessionStorage.getItem('ds_auth') === '1') {
+        localStorage.setItem('ds_auth', '1');
         document.getElementById('lockScreen').style.display = 'none';
         document.getElementById('appShell').style.display = 'block';
         initAfterUnlock();

@@ -48,7 +48,7 @@ function doGet(e) {
     status: 'ok',
     app: 'dashboard-data-sekolah',
     message: 'API Dashboard Data Sekolah aktif.',
-    version: '2.0'
+    version: '2.1'
   });
 }
 
@@ -221,6 +221,40 @@ function getMetadataCached_(forceRebuild) {
   delete out.index;
   out.cached = false;
   return out;
+}
+
+/**
+ * ============================================================================
+ * AUTO-SEGAR (SAMBUNGAN SENTIASA SEDIA)
+ * Jalankan pasangAutoSegar() SEKALI di editor Apps Script (klik Run).
+ * Ia memasang pemicu yang membina semula indeks setiap jam secara automatik,
+ * supaya aplikasi sentiasa dibuka dengan pantas dan data sentiasa terkini
+ * walaupun data diubah terus dalam Google Sheet. Tiada butang perlu ditekan.
+ * ============================================================================
+ */
+function pasangAutoSegar() {
+  buangAutoSegar();
+  ScriptApp.newTrigger('autoSegarIndeks_').timeBased().everyHours(1).create();
+  autoSegarIndeks_();
+  return 'Auto-segar dipasang: indeks dibina semula setiap 1 jam.';
+}
+
+function buangAutoSegar() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'autoSegarIndeks_') ScriptApp.deleteTrigger(t);
+  });
+  return 'Auto-segar dibuang.';
+}
+
+function autoSegarIndeks_() {
+  const lock = LockService.getScriptLock();
+  // Jangan bina semula semasa muat naik sedang berjalan
+  if (!lock.tryLock(5000)) return;
+  try {
+    getMetadataCached_(true);
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 /** Jalankan secara manual jika data diubah terus dalam Google Sheet. */
