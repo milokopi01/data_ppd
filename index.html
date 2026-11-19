@@ -1293,13 +1293,43 @@
         showToast('URL Google Apps Script belum ditetapkan pada baris ke-5 fail index.html.', true);
         return;
       }
-      await loadMetadata();
+      await initMetadata();
     }
 
-    async function loadMetadata() {
-      setConnStatus(false, 'Memuat indeks...');
+    const META_LS_KEY = 'ds_meta_cache_v1';
+
+    function loadCachedMetadata() {
+      try {
+        const c = JSON.parse(localStorage.getItem(META_LS_KEY) || 'null');
+        if (c && c.url === state.gasUrl && c.data) return c.data;
+      } catch (e) {}
+      return null;
+    }
+
+    async function initMetadata() {
+      // Papar indeks tersimpan serta-merta, kemudian segarkan di latar belakang
+      const cached = loadCachedMetadata();
+      if (cached) {
+        applyMetadata(cached);
+        setConnStatus(true, `${cached.schools.length} Sekolah`);
+      }
+      await loadMetadata(!!cached);
+    }
+
+    async function loadMetadata(silent = false) {
+      if (!silent) setConnStatus(false, 'Memuat indeks (±1 minit)...');
       try {
         const res = await callGAS({ action: 'getMetadata' });
+        applyMetadata(res);
+        try { localStorage.setItem(META_LS_KEY, JSON.stringify({ url: state.gasUrl, data: { headers: res.headers, counts: res.counts, schools: res.schools } })); } catch (e) {}
+        setConnStatus(true, `${state.metadata.schools.length} Sekolah`);
+      } catch (err) {
+        if (!silent) setConnStatus(false, 'Terputus');
+        showToast(err.message, true);
+      }
+    }
+
+    function applyMetadata(res) {
         state.metadata = {
           headers: res.headers || { MURID: [], GURU: [], AKP: [] },
           counts: res.counts || { MURID: 0, GURU: 0, AKP: 0 },
@@ -1327,12 +1357,6 @@
           <div>• <strong>Rekod Guru:</strong> ${(state.metadata.counts.GURU || 0).toLocaleString()} baris (${(state.metadata.headers.GURU || []).length} kolum)</div>
           <div>• <strong>Rekod AKP:</strong> ${(state.metadata.counts.AKP || 0).toLocaleString()} baris (${(state.metadata.headers.AKP || []).length} kolum)</div>
         `;
-
-        setConnStatus(true, `${state.metadata.schools.length} Sekolah`);
-      } catch (err) {
-        setConnStatus(false, 'Terputus');
-        showToast(err.message, true);
-      }
     }
 
     function getSmartDefaultCols(cat, headers) {

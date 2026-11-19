@@ -48,7 +48,7 @@ function doGet(e) {
     status: 'ok',
     app: 'dashboard-data-sekolah',
     message: 'API Dashboard Data Sekolah aktif.',
-    version: '1.0'
+    version: '2.0'
   });
 }
 
@@ -75,7 +75,11 @@ function doPost(e) {
     }
 
     if (action === 'getMetadata') {
-      return jsonResponse_(handleGetMetadata_());
+      return jsonResponse_(getMetadataCached_(req.refresh === true));
+    }
+
+    if (action === 'rebuildMetadata') {
+      return jsonResponse_(getMetadataCached_(true));
     }
 
     if (action === 'getSchoolData') {
@@ -142,13 +146,99 @@ function findColIndex_(headers, candidates) {
  * Ambil senarai header, jumlah rekod, dan senarai sekolah unik dari 3 jadual
  * Dioptimumkan: Hanya baca lajur Kod & Nama Sekolah supaya pantas untuk data besar
  */
+/**
+ * ============================================================================
+ * CACHE INDEKS (supaya app dibuka dengan pantas)
+ * Indeks (header, jumlah rekod, senarai sekolah & lokasi baris setiap sekolah)
+ * disimpan dalam Script Properties. Ia dibina semula secara automatik selepas
+ * muat naik. Jika data diubah terus dalam Google Sheet, jalankan fungsi
+ * binaSemulaIndeks() sekali di editor Apps Script.
+ * ============================================================================
+ */
+const META_PREFIX = 'META_CHUNK_';
+const META_CHUNK_SIZE = 8000;
+
+function saveJsonToProps_(prefix, obj) {
+  const props = PropertiesService.getScriptProperties();
+  clearJsonFromProps_(prefix);
+  const text = JSON.stringify(obj);
+  const chunks = {};
+  let n = 0;
+  for (let i = 0; i < text.length; i += META_CHUNK_SIZE) {
+    chunks[prefix + n] = text.substring(i, i + META_CHUNK_SIZE);
+    n++;
+  }
+  chunks[prefix + 'COUNT'] = String(n);
+  props.setProperties(chunks, false);
+}
+
+function loadJsonFromProps_(prefix) {
+  const all = PropertiesService.getScriptProperties().getProperties();
+  const n = Number(all[prefix + 'COUNT'] || 0);
+  if (!n) return null;
+  let text = '';
+  for (let i = 0; i < n; i++) {
+    if (all[prefix + i] === undefined) return null;
+    text += all[prefix + i];
+  }
+  try { return JSON.parse(text); } catch (e) { return null; }
+}
+
+function clearJsonFromProps_(prefix) {
+  const props = PropertiesService.getScriptProperties();
+  const all = props.getProperties();
+  Object.keys(all).forEach(function (k) {
+    if (k.indexOf(prefix) === 0) props.deleteProperty(k);
+  });
+}
+
+function invalidateMetadata_() {
+  clearJsonFromProps_(META_PREFIX);
+  try { CacheService.getScriptCache().remove('META_READY'); } catch (e) {}
+}
+
+function getMetadataCached_(forceRebuild) {
+  if (!forceRebuild) {
+    const cached = loadJsonFromProps_(META_PREFIX);
+    if (cached && cached.status === 'success') {
+      cached.cached = true;
+      delete cached.index; // indeks baris tidak perlu dihantar ke pelayar
+      return cached;
+    }
+  }
+  const fresh = handleGetMetadata_();
+  try {
+    saveJsonToProps_(META_PREFIX, fresh);
+  } catch (e) {
+    // Jika indeks terlalu besar untuk disimpan, simpan tanpa indeks baris
+    try {
+      const lite = JSON.parse(JSON.stringify(fresh));
+      delete lite.index;
+      saveJsonToProps_(META_PREFIX, lite);
+    } catch (e2) {}
+  }
+  const out = JSON.parse(JSON.stringify(fresh));
+  delete out.index;
+  out.cached = false;
+  return out;
+}
+
+/** Jalankan secara manual jika data diubah terus dalam Google Sheet. */
+function binaSemulaIndeks() {
+  const m = getMetadataCached_(true);
+  return 'Indeks dibina semula: ' + m.schools.length + ' sekolah, Murid ' + m.counts.MURID +
+    ', Guru ' + m.counts.GURU + ', AKP ' + m.counts.AKP + '.';
+}
+
 function handleGetMetadata_() {
   const categories = ['MURID', 'GURU', 'AKP'];
   const headersMap = {};
   const countsMap = {};
   const schoolMap = {};
+  const indexMap = {}; // { CAT: { KOD: [[barisMula, bilangan], ...] } }
 
   categories.forEach(function (cat) {
+    indexMap[cat] = {};
     const sheet = getTargetSheet_(cat);
     const lastRow = sheet.getLastRow();
     const lastCol = sheet.getLastColumn();
@@ -178,9 +268,15 @@ function handleGetMetadata_() {
       ? sheet.getRange(2, namaIdx + 1, lastRow - 1, 1).getValues()
       : null;
 
+    const catIdx = indexMap[cat];
     for (let r = 0; r < kodVals.length; r++) {
       const kod = normalizeCode_(kodVals[r][0]);
       if (!kod) continue;
+      const sheetRow = r + 2;
+      const runs = catIdx[kod] || (catIdx[kod] = []);
+      const last = runs[runs.length - 1];
+      if (last && last[0] + last[1] === sheetRow) last[1]++;
+      else runs.push([sheetRow, 1]);
       const nama = namaVals ? String(namaVals[r][0] || '').trim() : '';
       if (!schoolMap[kod] || (nama && schoolMap[kod].nama === '')) {
         schoolMap[kod] = { kod: kod, nama: nama };
@@ -196,7 +292,9 @@ function handleGetMetadata_() {
     status: 'success',
     headers: headersMap,
     counts: countsMap,
-    schools: schools
+    schools: schools,
+    index: indexMap,
+    builtAt: new Date().toISOString()
   };
 }
 
@@ -218,6 +316,8 @@ function handleGetSchoolData_(kodInput) {
   };
 
   const CHUNK_SIZE = 10000;
+  const meta = loadJsonFromProps_(META_PREFIX);
+  const index = meta && meta.index ? meta.index : null;
 
   categories.forEach(function (cat) {
     const sheet = getTargetSheet_(cat);
@@ -243,26 +343,46 @@ function handleGetSchoolData_(kodInput) {
 
     const matchedRows = [];
 
-    // Baca secara berperingkat (chunk) bagi mengelakkan had memori Apps Script
-    for (let startRow = 2; startRow <= lastRow; startRow += CHUNK_SIZE) {
-      const numRows = Math.min(CHUNK_SIZE, lastRow - startRow + 1);
-      const values = sheet.getRange(startRow, 1, numRows, lastCol).getDisplayValues();
-
-      for (let i = 0; i < values.length; i++) {
-        const row = values[i];
-        if (normalizeCode_(row[kodIdx]) === targetKod) {
-          matchedRows.push(row);
-          if (!result.namaSekolah && namaIdx !== -1 && row[namaIdx]) {
-            result.namaSekolah = String(row[namaIdx]).trim();
+    // LALUAN PANTAS: guna indeks lokasi baris (hanya baca baris sekolah ini)
+    if (index && index[cat]) {
+      const runs = index[cat][targetKod] || [];
+      runs.forEach(function (run) {
+        if (run[0] > lastRow) return;
+        const n = Math.min(run[1], lastRow - run[0] + 1);
+        const vals = sheet.getRange(run[0], 1, n, lastCol).getDisplayValues();
+        vals.forEach(function (row) {
+          if (normalizeCode_(row[kodIdx]) === targetKod) {
+            matchedRows.push(row);
+            if (!result.namaSekolah && namaIdx !== -1 && row[namaIdx]) {
+              result.namaSekolah = String(row[namaIdx]).trim();
+            }
           }
-        }
-      }
+        });
+      });
+      result.data[cat] = { headers: headers, rows: matchedRows };
+      return;
     }
 
-    result.data[cat] = {
-      headers: headers,
-      rows: matchedRows
-    };
+    // LALUAN BIASA: baca lajur Kod Sekolah sahaja, kemudian baris yang sepadan
+    const kodCol = sheet.getRange(2, kodIdx + 1, lastRow - 1, 1).getValues();
+    const runsFound = [];
+    for (let r = 0; r < kodCol.length; r++) {
+      if (normalizeCode_(kodCol[r][0]) !== targetKod) continue;
+      const sr = r + 2;
+      const lr = runsFound[runsFound.length - 1];
+      if (lr && lr[0] + lr[1] === sr) lr[1]++;
+      else runsFound.push([sr, 1]);
+    }
+    runsFound.forEach(function (run) {
+      const vals = sheet.getRange(run[0], 1, run[1], lastCol).getDisplayValues();
+      vals.forEach(function (row) {
+        matchedRows.push(row);
+        if (!result.namaSekolah && namaIdx !== -1 && row[namaIdx]) {
+          result.namaSekolah = String(row[namaIdx]).trim();
+        }
+      });
+    });
+    result.data[cat] = { headers: headers, rows: matchedRows };
   });
 
   return result;
@@ -287,6 +407,9 @@ function handleUploadBatch_(req) {
     const rows = Array.isArray(req.rows) ? req.rows : [];
 
     const sheet = getTargetSheet_(category);
+
+    // Data berubah: indeks lama tidak sah lagi (akan dibina semula selepas muat naik)
+    invalidateMetadata_();
 
     // Batch pertama: tetapkan header atau kosongkan sheet jika mod Replace
     if (batchIndex === 0) {
