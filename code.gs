@@ -46,6 +46,7 @@ function setupSistem() {
 function doGet(e) {
   return jsonResponse_({
     status: 'ok',
+    app: 'dashboard-data-sekolah',
     message: 'API Dashboard Data Sekolah aktif.',
     version: '1.0'
   });

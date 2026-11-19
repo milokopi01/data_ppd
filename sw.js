@@ -1,4 +1,4 @@
-const CACHE_NAME = 'dashboard-sekolah-v1';
+const CACHE_NAME = 'dashboard-sekolah-v2';
 const APP_SHELL = [
   './',
   './index.html',
@@ -31,6 +31,23 @@ self.addEventListener('fetch', (event) => {
 
   // Jangan sekali-kali cache panggilan API Google Apps Script
   if (url.includes('script.google.com') || event.request.method !== 'GET') {
+    return;
+  }
+
+  // Halaman HTML: sentiasa ambil versi terkini dari rangkaian (network-first)
+  const isPage = event.request.mode === 'navigate' || url.endsWith('.html') || url.endsWith('/');
+  if (isPage) {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          if (response && response.status === 200) {
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+          }
+          return response;
+        })
+        .catch(() => caches.match(event.request))
+    );
     return;
   }
 

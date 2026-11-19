@@ -2,6 +2,7 @@
 <html lang="ms">
 <head>
   <meta charset="UTF-8" />
+  <script>window.GAS_URL = 'https://script.google.com/macros/s/AKfycbwkLhAJFNA2K0sypbN4yqvecTavNG0fyqMstBCuc0QTnrVZVxBokSnys6f_pf6LHrUh/exec'; /* URL Web App Google Apps Script (KEKAL untuk semua pengguna) */</script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#ffffff" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -1055,16 +1056,13 @@
     <!-- ================= PAPARAN 3: TETAPAN SAMBUNGAN ================= -->
     <section id="view-settings" class="view-panel">
       <div class="card-3d" style="padding:24px; max-width:760px;">
-        <h3 style="font-size:1.1rem; font-weight:800; margin-bottom:6px;">Tetapan Sambungan Google Apps Script</h3>
+        <h3 style="font-size:1.1rem; font-weight:800; margin-bottom:6px;">Tetapan</h3>
         <p style="font-size:0.86rem; color:var(--text-sub); margin-bottom:16px;">
-          Tampal URL Web App daripada Google Apps Script (berakhir dengan <code>/exec</code>) di bawah. Tetapan ini disimpan secara automatik pada pelayar anda.
+          Sambungan ke Google Sheet telah ditetapkan secara kekal. Semua pengguna pautan ini melihat data yang sama.
         </p>
 
-        <label class="field-label" for="gasUrlInput">URL Web App Google Apps Script</label>
-        <input id="gasUrlInput" type="url" class="input-3d" placeholder="https://script.google.com/macros/s/xxxxx/exec" style="margin-bottom:14px;" />
-
         <div style="display:flex; flex-wrap:wrap; gap:10px; margin-bottom:22px;">
-          <button id="btnSaveGasUrl" class="btn-3d btn-primary">💾 Simpan & Uji Sambungan</button>
+          <button id="btnTestConn" class="btn-3d btn-primary">🔄 Uji Sambungan & Segar Data</button>
           <button id="btnResetCols" class="btn-3d btn-white">♻️ Tetap Semula Pilihan Kolum</button>
         </div>
 
@@ -1112,8 +1110,11 @@
      * KONFIGURASI UTAMA
      * ======================================================================== */
     const APP_PIN = '101010';
-    // TAMPAL URL WEB APP GOOGLE APPS SCRIPT ANDA DI SINI SEBELUM UPLOAD KE GITHUB
-    const DEFAULT_GAS_URL = 'MASUKKAN_URL_WEB_APP_GAS_DI_SINI';
+    // URL Web App ditetapkan secara KEKAL pada baris ke-5 fail ini (window.GAS_URL).
+    // Semua pengguna yang membuka pautan ini akan berhubung ke Google Sheet yang SAMA.
+    const DEFAULT_GAS_URL = String(window.GAS_URL || '').trim();
+    // Buang URL lama yang pernah disimpan dalam pelayar supaya tidak mengatasi URL kekal
+    try { localStorage.removeItem('ds_gas_url'); } catch (e) {}
     const BATCH_UPLOAD_SIZE = 500;
 
     // Kolum lalai yang dicadangkan mengikut fail sebenar anda
@@ -1131,7 +1132,7 @@
 
     // Keadaan Global Aplikasi
     const state = {
-      gasUrl: localStorage.getItem('ds_gas_url') || (DEFAULT_GAS_URL.startsWith('http') ? DEFAULT_GAS_URL : ''),
+      gasUrl: DEFAULT_GAS_URL.startsWith('http') ? DEFAULT_GAS_URL : '',
       metadata: { headers: { MURID: [], GURU: [], AKP: [] }, counts: { MURID: 0, GURU: 0, AKP: 0 }, schools: [] },
       currentSchool: null,
       catMode: 'ALL',
@@ -1176,7 +1177,7 @@
 
     async function callGAS(payload) {
       if (!state.gasUrl || !state.gasUrl.startsWith('http')) {
-        throw new Error('URL Google Apps Script belum ditetapkan. Sila masukkan di tab Tetapan.');
+        throw new Error('URL Google Apps Script belum ditetapkan pada baris ke-5 fail index.html.');
       }
       const res = await fetch(state.gasUrl, {
         method: 'POST',
@@ -1184,7 +1185,15 @@
         body: JSON.stringify({ ...payload, pin: APP_PIN })
       });
       if (!res.ok) throw new Error('Ralat rangkaian HTTP ' + res.status);
-      const data = await res.json();
+      const text = await res.text();
+      let data;
+      try { data = JSON.parse(text); }
+      catch (e) { throw new Error('Respon Google Apps Script tidak sah. Pastikan Web App di-deploy dengan akses "Anyone".'); }
+      // Pastikan URL ini benar-benar menjalankan code.gs Dashboard Data Sekolah
+      if (!data || typeof data.status === 'undefined') {
+        const extra = data && (data.error || data.message) ? ' (Respon: ' + (data.error || data.message) + ')' : '';
+        throw new Error('URL Apps Script ini BUKAN API Dashboard Data Sekolah' + extra + '. Sila deploy code.gs dalam projek Apps Script yang berasingan.');
+      }
       if (data.status === 'error') throw new Error(data.message || 'Ralat pelayan.');
       return data;
     }
@@ -1237,10 +1246,9 @@
     });
 
     async function initAfterUnlock() {
-      document.getElementById('gasUrlInput').value = state.gasUrl;
       if (!state.gasUrl) {
         setConnStatus(false, 'Belum Tetap URL');
-        showToast('Sila masukkan URL Web App Google Apps Script di tab Tetapan.', true);
+        showToast('URL Google Apps Script belum ditetapkan pada baris ke-5 fail index.html.', true);
         return;
       }
       await loadMetadata();
@@ -1797,7 +1805,7 @@
           const chunk = parsed.rows.slice(b * BATCH_UPLOAD_SIZE, (b + 1) * BATCH_UPLOAD_SIZE);
           progTxt.textContent = `Menghantar batch ${b + 1} / ${totalBatches} (${Math.min((b + 1) * BATCH_UPLOAD_SIZE, totalRows).toLocaleString()} baris)...`;
 
-          await callGAS({
+          const up = await callGAS({
             action: 'uploadBatch',
             category: cat,
             mode: mode,
@@ -1805,12 +1813,16 @@
             headers: parsed.headers,
             rows: chunk
           });
+          if (typeof up.rowsWritten !== 'number') {
+            throw new Error('Pelayan tidak mengesahkan penyimpanan batch ' + (b + 1) + '.');
+          }
 
           const pct = Math.round(((b + 1) / totalBatches) * 100);
           progBar.style.width = pct + '%';
         }
 
         progTxt.textContent = `Selesai! ${totalRows.toLocaleString()} rekod berjaya disimpan ke Google Sheet.`;
+        progTxt.style.color = '';
         showToast(`Muat naik Data ${cat} selesai (${totalRows.toLocaleString()} baris).`);
         await loadMetadata();
       } catch (err) {
@@ -1824,15 +1836,8 @@
     /* ========================================================================
      * TETAPAN & SERVICE WORKER PWA
      * ======================================================================== */
-    document.getElementById('btnSaveGasUrl').addEventListener('click', async () => {
-      const url = document.getElementById('gasUrlInput').value.trim();
-      if (!url.startsWith('https://script.google.com/')) {
-        showToast('Sila masukkan URL Google Apps Script yang sah (bermula dengan https://script.google.com/).', true);
-        return;
-      }
-      state.gasUrl = url;
-      localStorage.setItem('ds_gas_url', url);
-      showToast('URL disimpan. Menguji sambungan...');
+    document.getElementById('btnTestConn').addEventListener('click', async () => {
+      showToast('Menguji sambungan...');
       await loadMetadata();
     });
 
